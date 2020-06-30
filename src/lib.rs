@@ -92,3 +92,5 @@ pub mod hash_map {
 }
 
 pub use crate::map::HashMap;
+
+pub use hashbrown::TryReserveError;

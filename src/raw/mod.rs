@@ -7,6 +7,40 @@ use core::iter::FusedIterator;
 use core::mem;
 use hashbrown::raw;
 
+/// A reference to a hash table bucket containing a `T`.
+///
+/// This is usually just a pointer to the element itself. However if the element
+/// is a ZST, then we instead track the index of the element in the table so
+/// that `erase` works properly.
+pub struct Bucket<T> {
+    bucket: raw::Bucket<T>,
+    in_main: bool,
+}
+
+impl<T> Clone for Bucket<T> {
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn clone(&self) -> Self {
+        Bucket {
+            bucket: self.bucket.clone(),
+            in_main: self.in_main,
+        }
+    }
+}
+
+impl<T> Bucket<T> {
+    /// Returns true if this bucket is in the "old" table and will be moved.
+    pub fn will_move(&self) -> bool {
+        !self.in_main
+    }
+}
+
+impl<T> core::ops::Deref for Bucket<T> {
+    type Target = raw::Bucket<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.bucket
+    }
+}
+
 /// A raw hash table with an unsafe API.
 ///
 /// This is a wrapper around [`hashbrown::raw::RawTable`] that also implements incremental
@@ -43,6 +77,15 @@ impl<T> RawTable<T> {
         }
     }
 
+    /// Returns a pointer to an element in the table.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub unsafe fn bucket(&self, index: usize) -> Bucket<T> {
+        Bucket {
+            bucket: self.table.bucket(index),
+            in_main: true,
+        }
+    }
+
     /// Erases an element from the table without dropping it.
     #[cfg_attr(feature = "inline-more", inline)]
     pub unsafe fn erase_no_drop(&mut self, item: &Bucket<T>) {
@@ -51,15 +94,28 @@ impl<T> RawTable<T> {
         } else if let Some(ref mut lo) = self.leftovers {
             lo.table.erase_no_drop(item);
 
-            // By changing the state of the table, we have invalidated the table iterator
-            // we keep for what elements are left to move. So, we re-compute it.
-            //
-            // TODO: We should be able to "fix up" the iterator rather than replace it,
-            // which would save us from iterating over the prefix of empty buckets we've
-            // left in our wake from the moves so far.
-            lo.items = lo.table.iter();
+            if lo.table.len() == 0 {
+                let _ = self.leftovers.take();
+            } else {
+                // By changing the state of the table, we have invalidated the table iterator
+                // we keep for what elements are left to move. So, we re-compute it.
+                //
+                // TODO: We should be able to "fix up" the iterator rather than replace it,
+                // which would save us from iterating over the prefix of empty buckets we've
+                // left in our wake from the moves so far.
+                lo.items = lo.table.iter();
+            }
         } else {
             unreachable!("invalid bucket state");
+        }
+    }
+
+    /// Marks all table buckets as empty without dropping their contents.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn clear_no_drop(&mut self) {
+        self.table.clear_no_drop();
+        if let Some(mut lo) = self.leftovers.take() {
+            lo.table.clear_no_drop();
         }
     }
 
@@ -70,13 +126,71 @@ impl<T> RawTable<T> {
         self.table.clear();
     }
 
+    /// Shrinks the table so that it fits as close to `min_size` elements as possible.
+    ///
+    /// In reality, the table may end up larger than `min_size`, as must be able to hold all the
+    /// current elements, as well as some additional elements due to incremental resizing.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn shrink_to(&mut self, min_size: usize, hasher: impl Fn(&T) -> u64) {
+        // Calculate the minimal number of elements that we need to reserve
+        // space for.
+        let mut need = self.table.len();
+        // We need to make sure that we never have to resize while there
+        // are still leftovers.
+        if let Some(ref lo) = self.leftovers {
+            // We need to move another lo.table.len() items.
+            need += lo.table.len();
+            // We move R items on each insert.
+            // That means we need to accomodate another
+            // lo.table.len() / R (rounded up) inserts to move them all.
+            need += (lo.table.len() + R - 1) / R;
+        }
+        let min_size = usize::max(need, min_size);
+        self.table.shrink_to(min_size, hasher);
+    }
+
+    /// Ensures that at least `additional` items can be inserted into the table
+    /// without reallocation.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn reserve(&mut self, additional: usize, hasher: impl Fn(&T) -> u64) {
+        self.table.reserve(
+            self.leftovers.as_ref().map_or(0, |t| t.table.len()) + additional,
+            hasher,
+        )
+    }
+
+    /// Tries to ensure that at least `additional` items can be inserted into
+    /// the table without reallocation.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn try_reserve(
+        &mut self,
+        additional: usize,
+        hasher: impl Fn(&T) -> u64,
+    ) -> Result<(), hashbrown::TryReserveError> {
+        self.table.try_reserve(
+            self.leftovers.as_ref().map_or(0, |t| t.table.len()) + additional,
+            hasher,
+        )
+    }
+
     /// Inserts a new element into the table.
     ///
     /// This does not check if the given element already exists in the table.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn insert(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
         let bucket = if self.leftovers.is_some() {
-            let bucket = self.table.insert(hash, value, &hasher);
+            let bucket = if cfg!(debug_assertions) {
+                let cap = self.table.capacity();
+                let b = self.table.insert(hash, value, &hasher);
+                assert_eq!(
+                    cap,
+                    self.table.capacity(),
+                    "resize while elements are still left over"
+                );
+                b
+            } else {
+                self.table.insert(hash, value, &hasher)
+            };
             // Also carry some items over.
             self.carry(hasher);
             bucket
@@ -87,8 +201,24 @@ impl<T> RawTable<T> {
             // We need to grow the table by at least a factor of (R + 1)/R to ensure that
             // the new table won't _also_ grow while we're still moving items from the old
             // one.
-            let need_cap = ((R + 1) / R) * (self.table.len() + 1);
-            let mut new_table = raw::RawTable::with_capacity(need_cap);
+            //
+            // Here's how we get to len * (R + 1)/R:
+            //  - We need to move another len items
+            let need = self.table.len();
+            //  - We move R items on each insert, so to move len items takes
+            //    len / R inserts (rounded up!)
+            //  - Since we want to round up, we pull the old +R-1 trick
+            let inserts = (self.table.len() + R - 1) / R;
+            //  - That's len + len/R
+            //    Which is == R*len/R + len/R
+            //    Which is == ((R+1)*len)/R
+            //    Which is == len * (R+1)/R
+            //  - We don't actually use that formula because of integer division.
+            //
+            // We don't normally need to do +1 here to account for the ongoing insert, since
+            // that'll be wrapped up in `inserts`. But we do anyway to handle the case where
+            // the table is _currently_ empty.
+            let mut new_table = raw::RawTable::with_capacity(need + inserts + 1);
 
             let bucket = new_table.insert(hash, value, &hasher);
             let old_table = mem::replace(&mut self.table, new_table);
@@ -163,6 +293,22 @@ impl<T> RawTable<T> {
     }
 }
 
+impl<T: Clone> RawTable<T> {
+    /// Variant of `clone_from` to use when a hasher is available.
+    #[cfg(feature = "raw")]
+    pub fn clone_from_with_hasher(&mut self, source: &Self, hasher: impl Fn(&T) -> u64) {
+        self.table.clone_from_with_hasher(&source.table, &hasher);
+        if let Some(ref lo_) = source.leftovers {
+            if let Some(ref mut lo) = self.leftovers {
+                lo.table.clone_from_with_hasher(&lo_.table, hasher);
+                lo.items = unsafe { lo.table.iter() };
+            } else {
+                self.leftovers = Some(lo_.clone());
+            }
+        }
+    }
+}
+
 impl<T> RawTable<T> {
     #[cold]
     #[inline(never)]
@@ -225,7 +371,6 @@ impl<T> IntoIterator for RawTable<T> {
     }
 }
 
-#[derive(Clone)]
 struct OldTable<T> {
     table: raw::RawTable<T>,
 
@@ -234,33 +379,20 @@ struct OldTable<T> {
     items: raw::RawIter<T>,
 }
 
-/// A reference to a hash table bucket containing a `T`.
-///
-/// This is usually just a pointer to the element itself. However if the element
-/// is a ZST, then we instead track the index of the element in the table so
-/// that `erase` works properly.
-pub struct Bucket<T> {
-    bucket: raw::Bucket<T>,
-    in_main: bool,
-}
-
-impl<T> Bucket<T> {
-    /// Returns true if this bucket is in the "old" table and will be moved.
-    pub fn will_move(&self) -> bool {
-        !self.in_main
+impl<T: Clone> Clone for OldTable<T> {
+    fn clone(&self) -> OldTable<T> {
+        let table = self.table.clone();
+        let items = unsafe { table.iter() };
+        OldTable { table, items }
     }
-}
 
-impl<T> core::ops::Deref for Bucket<T> {
-    type Target = raw::Bucket<T>;
-    fn deref(&self) -> &Self::Target {
-        &self.bucket
+    fn clone_from(&mut self, source: &Self) {
+        self.table.clone_from(&source.table);
+        self.items = unsafe { self.table.iter() };
     }
 }
 
 /// Iterator which returns a raw pointer to every full bucket in the table.
-///
-/// Note that the buckets that are returned _may_ be in the old table that will soon be reclaimed.
 pub struct RawIter<T> {
     table: raw::RawIter<T>,
     leftovers: Option<raw::RawIter<T>>,

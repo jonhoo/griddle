@@ -1,4 +1,5 @@
 use crate::raw::{RawIntoIter, RawIter, RawTable};
+use crate::TryReserveError;
 use core::borrow::Borrow;
 use core::fmt::{self, Debug};
 use core::hash::{BuildHasher, Hash, Hasher};
@@ -6,7 +7,8 @@ use core::iter::{FromIterator, FusedIterator};
 use core::marker::PhantomData;
 use core::mem;
 use core::ops::Index;
-use hashbrown::hash_map::DefaultHashBuilder;
+
+pub use hashbrown::hash_map::DefaultHashBuilder;
 
 /// A `HashMap` variant that spreads resize load across inserts.
 ///
@@ -416,6 +418,36 @@ impl<K, V, S> HashMap<K, V, S> {
         self.len() == 0
     }
 
+    /// Retains only the elements specified by the predicate.
+    ///
+    /// In other words, remove all pairs `(k, v)` such that `f(&k,&mut v)` returns `false`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<i32, i32> = (0..8).map(|x|(x, x*10)).collect();
+    /// map.retain(|&k, _| k % 2 == 0);
+    /// assert_eq!(map.len(), 4);
+    /// ```
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        // Here we only use `iter` as a temporary, preventing use-after-free
+        unsafe {
+            for item in self.table.iter() {
+                let &mut (ref key, ref mut value) = item.as_mut();
+                if !f(key, value) {
+                    // Erase the element from the table first since drop might panic.
+                    self.table.erase_no_drop(&item);
+                    item.drop();
+                }
+            }
+        }
+    }
+
     /// Clears the map, removing all key-value pairs. Keeps the allocated memory
     /// for reuse.
     ///
@@ -440,6 +472,105 @@ where
     K: Eq + Hash,
     S: BuildHasher,
 {
+    /// Reserves capacity for at least `additional` more elements to be inserted
+    /// in the `HashMap`. The collection may reserve more space to avoid
+    /// frequent reallocations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new allocation size overflows [`usize`].
+    ///
+    /// [`usize`]: https://doc.rust-lang.org/std/primitive.usize.html
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// let mut map: HashMap<&str, i32> = HashMap::new();
+    /// map.reserve(10);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn reserve(&mut self, additional: usize) {
+        let hash_builder = &self.hash_builder;
+        self.table
+            .reserve(additional, |x| make_hash(hash_builder, &x.0));
+    }
+
+    /// Tries to reserve capacity for at least `additional` more elements to be inserted
+    /// in the given `HashMap<K,V>`. The collection may reserve more space to avoid
+    /// frequent reallocations.
+    ///
+    /// # Errors
+    ///
+    /// If the capacity overflows, or the allocator reports a failure, then an error
+    /// is returned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// let mut map: HashMap<&str, isize> = HashMap::new();
+    /// map.try_reserve(10).expect("why is the test harness OOMing on 10 bytes?");
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        let hash_builder = &self.hash_builder;
+        self.table
+            .try_reserve(additional, |x| make_hash(hash_builder, &x.0))
+    }
+
+    /// Shrinks the capacity of the map as much as possible. It will drop
+    /// down as much as possible while maintaining the internal rules
+    /// and possibly leaving some space in accordance with the resize policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<i32, i32> = HashMap::with_capacity(100);
+    /// map.insert(1, 2);
+    /// map.insert(3, 4);
+    /// assert!(map.capacity() >= 100);
+    /// map.shrink_to_fit();
+    /// assert!(map.capacity() >= 2);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn shrink_to_fit(&mut self) {
+        let hash_builder = &self.hash_builder;
+        self.table.shrink_to(0, |x| make_hash(hash_builder, &x.0));
+    }
+
+    /// Shrinks the capacity of the map with a lower limit. It will drop
+    /// down no lower than the supplied limit while maintaining the internal rules
+    /// and possibly leaving some space in accordance with the resize policy.
+    ///
+    /// This function does nothing if the current capacity is smaller than the
+    /// supplied minimum capacity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<i32, i32> = HashMap::with_capacity(100);
+    /// map.insert(1, 2);
+    /// map.insert(3, 4);
+    /// assert!(map.capacity() >= 100);
+    /// map.shrink_to(10);
+    /// assert!(map.capacity() >= 10);
+    /// map.shrink_to(0);
+    /// assert!(map.capacity() >= 2);
+    /// map.shrink_to(10);
+    /// assert!(map.capacity() >= 2);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn shrink_to(&mut self, min_capacity: usize) {
+        let hash_builder = &self.hash_builder;
+        self.table
+            .shrink_to(min_capacity, |x| make_hash(hash_builder, &x.0));
+    }
+
     /// Returns a reference to the value corresponding to the key.
     ///
     /// The key may be any borrowed form of the map's key type, but
@@ -628,20 +759,22 @@ where
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-        let hash = make_hash(&self.hash_builder, &k);
-        if let Some(item) = self.table.find(hash, |x| k.eq(&x.0)) {
-            let v = Some(mem::replace(unsafe { &mut item.as_mut().1 }, v));
-            if item.will_move() {
-                debug_assert!(self.table.is_split());
+        unsafe {
+            let hash = make_hash(&self.hash_builder, &k);
+            if let Some(item) = self.table.find(hash, |x| k.eq(&x.0)) {
+                let v = Some(mem::replace(&mut item.as_mut().1, v));
+                if item.will_move() {
+                    debug_assert!(self.table.is_split());
+                    let hash_builder = &self.hash_builder;
+                    self.table.carry(|x| make_hash(hash_builder, &x.0));
+                }
+                v
+            } else {
                 let hash_builder = &self.hash_builder;
-                self.table.carry(|x| make_hash(hash_builder, &x.0));
+                self.table
+                    .insert(hash, (k, v), |x| make_hash(hash_builder, &x.0));
+                None
             }
-            v
-        } else {
-            let hash_builder = &self.hash_builder;
-            self.table
-                .insert(hash, (k, v), |x| make_hash(hash_builder, &x.0));
-            None
         }
     }
 
@@ -1139,6 +1272,44 @@ where
     }
 }
 
+/// Inserts all new key-values from the iterator and replaces values with existing
+/// keys with new values returned from the iterator.
+impl<K, V, S> Extend<(K, V)> for HashMap<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
+        // Keys may be already present or show multiple times in the iterator.
+        // Reserve the entire hint lower bound if the map is empty.
+        // Otherwise reserve half the hint (rounded up), so the map
+        // will only resize twice in the worst case.
+        let iter = iter.into_iter();
+        let reserve = if self.is_empty() {
+            iter.size_hint().0
+        } else {
+            (iter.size_hint().0 + 1) / 2
+        };
+        self.reserve(reserve);
+        iter.for_each(move |(k, v)| {
+            self.insert(k, v);
+        });
+    }
+}
+
+impl<'a, K, V, S> Extend<(&'a K, &'a V)> for HashMap<K, V, S>
+where
+    K: Eq + Hash + Copy,
+    V: Copy,
+    S: BuildHasher,
+{
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn extend<T: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: T) {
+        self.extend(iter.into_iter().map(|(&key, &value)| (key, value)));
+    }
+}
+
 #[allow(dead_code)]
 fn assert_covariance() {
     fn map_key<'new>(v: HashMap<&'static str, u8>) -> HashMap<&'new str, u8> {
@@ -1177,6 +1348,7 @@ fn assert_covariance() {
 mod test_map {
     use super::DefaultHashBuilder;
     use super::HashMap;
+    use crate::TryReserveError::*;
     use std::cell::RefCell;
     use std::usize;
     use std::vec::Vec;
@@ -1198,6 +1370,18 @@ mod test_map {
         assert_eq!(m.capacity(), 0);
 
         let m = HM::with_capacity_and_hasher(0, DefaultHashBuilder::default());
+        assert_eq!(m.capacity(), 0);
+
+        let mut m = HM::new();
+        m.insert(1, 1);
+        m.insert(2, 2);
+        m.remove(&1);
+        m.remove(&2);
+        m.shrink_to_fit();
+        assert_eq!(m.capacity(), 0);
+
+        let mut m = HM::new();
+        m.reserve(0);
         assert_eq!(m.capacity(), 0);
     }
 
@@ -1493,7 +1677,6 @@ mod test_map {
 
     #[test]
     #[cfg_attr(miri, ignore)] // FIXME: takes too long
-    #[ignore]
     fn test_lots_of_insertions() {
         let mut m = HashMap::new();
 
@@ -1804,6 +1987,44 @@ mod test_map {
     }
 
     #[test]
+    fn test_reserve_shrink_to_fit() {
+        let mut m = HashMap::new();
+        m.insert(0, 0);
+        m.remove(&0);
+        assert!(m.capacity() >= m.len());
+        for i in 0..128 {
+            m.insert(i, i);
+        }
+        assert!(m.is_split());
+        m.reserve(256);
+
+        let usable_cap = m.capacity();
+        for i in 128..(128 + 256) {
+            m.insert(i, i);
+            assert_eq!(m.capacity(), usable_cap);
+        }
+
+        for i in 100..(128 + 256) {
+            assert_eq!(m.remove(&i), Some(i));
+        }
+        m.shrink_to_fit();
+
+        assert_eq!(m.len(), 100);
+        assert!(!m.is_empty());
+        assert!(m.capacity() >= m.len());
+
+        for i in 0..100 {
+            assert_eq!(m.remove(&i), Some(i));
+        }
+        m.shrink_to_fit();
+        m.insert(0, 0);
+
+        assert_eq!(m.len(), 1);
+        assert!(m.capacity() >= m.len());
+        assert_eq!(m.remove(&0), Some(0));
+    }
+
+    #[test]
     fn test_from_iter() {
         let xs = (0..8).map(|v| (v, v));
 
@@ -1894,6 +2115,22 @@ mod test_map {
     }
 
     #[test]
+    fn test_extend_ref() {
+        let mut a = HashMap::new();
+        a.insert(1, "one");
+        let mut b = HashMap::new();
+        b.insert(2, "two");
+        b.insert(3, "three");
+
+        a.extend(&b);
+
+        assert_eq!(a.len(), 3);
+        assert_eq!(a[&1], "one");
+        assert_eq!(a[&2], "two");
+        assert_eq!(a[&3], "three");
+    }
+
+    #[test]
     fn test_capacity_not_less_than_len() {
         let mut a = HashMap::new();
         let mut item = 0;
@@ -1916,5 +2153,44 @@ mod test_map {
         // Insert at capacity should cause allocation.
         a.insert(item, 0);
         assert!(a.capacity() > a.len());
+    }
+
+    #[test]
+    fn test_retain() {
+        let mut map: HashMap<i32, i32> = HashMap::new();
+        for x in 0..120 {
+            map.insert(x, x * 10);
+        }
+        assert!(map.is_split());
+
+        map.retain(|&k, _| k % 2 == 0);
+        assert_eq!(map.len(), 60);
+        assert_eq!(map[&2], 20);
+        assert_eq!(map[&4], 40);
+        assert_eq!(map[&6], 60);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // FIXME: no OOM signalling (https://github.com/rust-lang/miri/issues/613)
+    fn test_try_reserve() {
+        let mut empty_bytes: HashMap<u8, u8> = HashMap::new();
+
+        const MAX_USIZE: usize = usize::MAX;
+
+        if let Err(CapacityOverflow) = empty_bytes.try_reserve(MAX_USIZE) {
+        } else {
+            panic!("usize::MAX should trigger an overflow!");
+        }
+
+        if let Err(AllocError { .. }) = empty_bytes.try_reserve(MAX_USIZE / 8) {
+        } else {
+            // This may succeed if there is enough free memory. Attempt to
+            // allocate a second hashmap to ensure the allocation will fail.
+            let mut empty_bytes2: HashMap<u8, u8> = HashMap::new();
+            if let Err(AllocError { .. }) = empty_bytes2.try_reserve(MAX_USIZE / 8) {
+            } else {
+                panic!("usize::MAX / 8 should trigger an OOM!");
+            }
+        }
     }
 }
