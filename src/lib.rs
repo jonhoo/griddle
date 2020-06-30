@@ -51,7 +51,7 @@
 //! severe latency spikes. This is more readily visible through a timeline latency plot
 //! (`misc/vroom.plt`):
 //!
-//! ![latency spikes on resize](misc/vroom.png)
+//! ![latency spikes on resize](https://raw.githubusercontent.com/jonhoo/griddle/master/misc/vroom.png)
 //!
 //! Resizes happen less frequently as the map grows, but they also take longer _when_ they occur.
 //! With griddle, those spikes are mostly gone. There is a small linear component left, which I
