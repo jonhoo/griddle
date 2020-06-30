@@ -182,9 +182,12 @@ impl<T> RawTable<T> {
             let bucket = if cfg!(debug_assertions) {
                 let cap = self.table.capacity();
                 let b = self.table.insert(hash, value, &hasher);
-                assert_eq!(
-                    cap,
-                    self.table.capacity(),
+
+                // make sure table didn't resize
+                // the +1 is because the insertion may have discovered that it was able to re-use a
+                // tombstone, in which it realizes its capacity is actually one greater.
+                assert!(
+                    cap <= self.table.capacity() + 1,
                     "resize while elements are still left over"
                 );
                 b
