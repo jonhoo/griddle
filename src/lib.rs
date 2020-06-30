@@ -90,6 +90,7 @@ pub mod raw {
 #[allow(dead_code)]
 mod raw;
 
+mod external_trait_impls;
 mod map;
 mod set;
 

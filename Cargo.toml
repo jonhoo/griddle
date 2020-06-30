@@ -24,6 +24,10 @@ hashbrown = { version = "0.8", default-features = false, features = ["raw"] }
 rayon_ = { version = "1.0", optional = true, package = "rayon" }
 serde_ = { version = "1.0.25", default-features = false, optional = true, package = "serde" }
 
+[dev-dependencies]
+rustc-hash = "=1.0"
+serde_test = "1.0"
+
 [features]
 default = [
     "ahash",
