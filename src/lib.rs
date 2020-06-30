@@ -81,13 +81,6 @@ use core::ops::Index;
 use hashbrown::hash_map::DefaultHashBuilder;
 use hashbrown::raw::{RawIntoIter, RawIter, RawTable};
 
-#[cfg_attr(feature = "inline-more", inline)]
-pub(crate) fn make_hash<K: Hash + ?Sized>(hash_builder: &impl BuildHasher, val: &K) -> u64 {
-    let mut state = hash_builder.build_hasher();
-    val.hash(&mut state);
-    state.finish()
-}
-
 #[cfg(test)]
 const R: usize = 4;
 #[cfg(not(test))]
@@ -187,6 +180,13 @@ impl<K: Clone, V: Clone, S: Clone> Clone for HashMap<K, V, S> {
     }
 }
 
+#[cfg_attr(feature = "inline-more", inline)]
+pub(crate) fn make_hash<K: Hash + ?Sized>(hash_builder: &impl BuildHasher, val: &K) -> u64 {
+    let mut state = hash_builder.build_hasher();
+    val.hash(&mut state);
+    state.finish()
+}
+
 #[cfg(feature = "ahash")]
 impl<K, V> HashMap<K, V, DefaultHashBuilder> {
     /// Creates an empty `HashMap`.
@@ -223,7 +223,8 @@ impl<K, V> HashMap<K, V, DefaultHashBuilder> {
 }
 
 impl<K, V, S> HashMap<K, V, S> {
-    /// Creates an empty `HashMap` which will use the given hash builder to hash keys.
+    /// Creates an empty `HashMap` which will use the given hash builder to hash
+    /// keys.
     ///
     /// The created map has the default initial capacity.
     ///
@@ -233,7 +234,7 @@ impl<K, V, S> HashMap<K, V, S> {
     /// manually using this function can expose a DoS attack vector.
     ///
     /// The `hash_builder` passed should implement the [`BuildHasher`] trait for
-    /// the map to be useful, see its documentation for details.
+    /// the HashMap to be useful, see its documentation for details.
     ///
     /// # Examples
     ///
@@ -256,8 +257,8 @@ impl<K, V, S> HashMap<K, V, S> {
         }
     }
 
-    /// Creates an empty `HashMap` with the specified capacity, using `hash_builder` to
-    /// hash the keys.
+    /// Creates an empty `HashMap` with the specified capacity, using `hash_builder`
+    /// to hash the keys.
     ///
     /// The hash map will be able to hold at least `capacity` elements without
     /// reallocating. If `capacity` is 0, the hash map will not allocate.
@@ -268,7 +269,7 @@ impl<K, V, S> HashMap<K, V, S> {
     /// manually using this function can expose a DoS attack vector.
     ///
     /// The `hash_builder` passed should implement the [`BuildHasher`] trait for
-    /// the map to be useful, see its documentation for details.
+    /// the HashMap to be useful, see its documentation for details.
     ///
     /// # Examples
     ///
@@ -312,7 +313,7 @@ impl<K, V, S> HashMap<K, V, S> {
 
     /// Returns the number of elements the map can hold without reallocating.
     ///
-    /// This number is a lower bound; the map might be able to hold
+    /// This number is a lower bound; the `HashMap<K, V>` might be able to hold
     /// more, but is guaranteed to be able to hold at least this many.
     ///
     /// # Examples
@@ -709,9 +710,8 @@ where
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-        let hash = make_hash(&self.hash_builder, &k);
-
         unsafe {
+            let hash = make_hash(&self.hash_builder, &k);
             if let Some(item) = self.table.find(hash, |x| k.eq(&x.0)) {
                 // The item is in the main table, so just replace it.
                 // NOTE: we do not carry here to keep the happy path fast.
