@@ -2025,6 +2025,7 @@ fn assert_covariance() {
 }
 
 #[cfg(test)]
+#[cfg(not(tarpaulin_include))] // don't count for coverage
 mod test_map {
     use super::DefaultHashBuilder;
     use super::Entry::{Occupied, Vacant};
