@@ -1,0 +1,2 @@
+[main]
+features = "rayon serde raw"
