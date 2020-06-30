@@ -1,0 +1,53 @@
+[package]
+name = "griddle"
+version = "0.1.0"
+authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
+edition = "2018"
+license = "MIT OR Apache-2.0"
+
+readme = "README.md"
+description = "A HashMap variant that spreads resize load across inserts"
+repository = "https://github.com/jonhoo/griddle.git"
+
+keywords = ["hash", "no_std", "hashmap", "amortized"]
+categories = ["data-structures", "no-std"]
+
+[badges]
+azure-devops = { project = "jonhoo/jonhoo", pipeline = "arrav", build = "26" }
+codecov = { repository = "jonhoo/griddle", branch = "master", service = "github" }
+maintenance = { status = "experimental" }
+
+
+[dependencies]
+hashbrown = { version = "0.8", default-features = false, features = ["raw"] }
+
+# For external trait impls
+rayon_ = { version = "1.0", optional = true, package = "rayon" }
+serde_ = { version = "1.0.25", default-features = false, optional = true, package = "serde" }
+
+[dev-dependencies]
+doc-comment = "0.3.1"
+
+[features]
+default = [
+    "ahash",
+    "inline-more",
+]
+
+serde = [ "serde_", "hashbrown/serde" ]
+rayon = [ "rayon_", "hashbrown/rayon" ]
+ahash = [ "hashbrown/ahash" ]
+ahash-compile-time-rng = [ "hashbrown/ahash-compile-time-rng" ]
+nightly = [ "hashbrown/nightly" ]
+
+# Enables usage of `#[inline]` on far more functions than by default in this
+# crate. This may lead to a performance increase but often comes at a compile
+# time cost.
+inline-more = [ "hashbrown/inline-more" ]
+
+[package.metadata.docs.rs]
+features = ["nightly", "rayon", "serde"]
+
+[[bench]]
+name = "vroom"
+harness = false
