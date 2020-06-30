@@ -35,29 +35,12 @@
 //!  - Reads and removals of **old** or **missing** keys are slower for a while after a resize.
 //!  - The incremental map is slightly larger on the stack.
 //!
-//! # Benchmarks
+//! Under the hood, griddle uses `hashbrown::raw` to avoid re-implementing the core pieces of
+//! `hashbrown`. It also stays _very_ close to `hashbrown`'s `HashMap` and `HashSet` wrappers, and
+//! even exposes a [`raw`] module so that you can build your own map on top of griddle's modified
+//! table behavior.
 //!
-//! There is a silly, but illustrative benchmark in `benches/vroom.rs`. It just runs lots of
-//! inserts back-to-back, and measures how long each one takes. The problem quickly becomes
-//! apparent:
-//!
-//! ```console
-//! $ cargo bench --bench vroom > data.txt
-//! hashbrown::HashMap max: 25.481194ms, mean: 1.349µs
-//! griddle::HashMap max: 1.700794ms, mean: 1.362µs
-//! ```
-//!
-//! You can see that the standard library implementation (through `hashbrown`) has some pretty
-//! severe latency spikes. This is more readily visible through a timeline latency plot
-//! (`misc/vroom.plt`):
-//!
-//! ![latency spikes on resize](https://raw.githubusercontent.com/jonhoo/griddle/master/misc/vroom.png)
-//!
-//! Resizes happen less frequently as the map grows, but they also take longer _when_ they occur.
-//! With griddle, those spikes are mostly gone. There is a small linear component left, which I
-//! believe comes from the work required to find the buckets that hold elements that must be moved.
-//!
-//! # Why griddle?
+//! # Why "griddle"?
 //!
 //! You can amortize the cost of making hashbrowns by using a griddle..?
 //!
