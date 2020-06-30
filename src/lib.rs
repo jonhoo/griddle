@@ -72,11 +72,9 @@
 #[macro_use]
 extern crate std;
 
-#[cfg(has_extern_crate_alloc)]
+#[cfg(feature = "rayon")]
 #[cfg_attr(test, macro_use)]
 extern crate alloc;
-#[cfg(not(has_extern_crate_alloc))]
-extern crate std as alloc;
 
 #[cfg(feature = "raw")]
 /// Experimental and unsafe `RawTable` API. This module is only available if the
@@ -85,6 +83,16 @@ pub mod raw {
     #[path = "mod.rs"]
     mod inner;
     pub use inner::*;
+
+    #[cfg(feature = "rayon")]
+    /// [rayon]-based parallel iterator types for raw hash tables.
+    /// You will rarely need to interact with it directly unless you have need
+    /// to name one of the iterator types.
+    ///
+    /// [rayon]: https://docs.rs/rayon/1.0/rayon
+    pub mod rayon {
+        pub use crate::external_trait_impls::rayon::raw::*;
+    }
 }
 #[cfg(not(feature = "raw"))]
 #[allow(dead_code)]
@@ -97,10 +105,30 @@ mod set;
 pub mod hash_map {
     //! A hash map implemented with quadratic probing and SIMD lookup.
     pub use crate::map::*;
+
+    #[cfg(feature = "rayon")]
+    /// [rayon]-based parallel iterator types for hash maps.
+    /// You will rarely need to interact with it directly unless you have need
+    /// to name one of the iterator types.
+    ///
+    /// [rayon]: https://docs.rs/rayon/1.0/rayon
+    pub mod rayon {
+        pub use crate::external_trait_impls::rayon::map::*;
+    }
 }
 pub mod hash_set {
     //! A hash set implemented as a `HashMap` where the value is `()`.
     pub use crate::set::*;
+
+    #[cfg(feature = "rayon")]
+    /// [rayon]-based parallel iterator types for hash sets.
+    /// You will rarely need to interact with it directly unless you have need
+    /// to name one of the iterator types.
+    ///
+    /// [rayon]: https://docs.rs/rayon/1.0/rayon
+    pub mod rayon {
+        pub use crate::external_trait_impls::rayon::set::*;
+    }
 }
 
 pub use crate::map::HashMap;

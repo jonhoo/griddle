@@ -72,8 +72,8 @@ pub use hashbrown::hash_map::DefaultHashBuilder;
 ///
 /// [crate-level documentation]: ../
 pub struct HashMap<K, V, S = DefaultHashBuilder> {
-    hash_builder: S,
-    table: RawTable<(K, V)>,
+    pub(crate) hash_builder: S,
+    pub(crate) table: RawTable<(K, V)>,
 }
 
 impl<K: Clone, V: Clone, S: Clone> Clone for HashMap<K, V, S> {

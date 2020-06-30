@@ -13,8 +13,8 @@ use hashbrown::raw;
 /// is a ZST, then we instead track the index of the element in the table so
 /// that `erase` works properly.
 pub struct Bucket<T> {
-    bucket: raw::Bucket<T>,
-    in_main: bool,
+    pub(crate) bucket: raw::Bucket<T>,
+    pub(crate) in_main: bool,
 }
 
 impl<T> Clone for Bucket<T> {
@@ -344,12 +344,12 @@ impl<T> RawTable<T> {
         self.leftovers.is_some()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "rayon"))]
     pub(crate) fn main(&self) -> &raw::RawTable<T> {
         &self.table
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "rayon"))]
     pub(crate) fn leftovers(&self) -> Option<&raw::RawTable<T>> {
         self.leftovers.as_ref().map(|lo| &lo.table)
     }

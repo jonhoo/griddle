@@ -1,7 +1,7 @@
 jobs:
  - template: default.yml@templates
    parameters:
-     minrust: 1.32.0
+     minrust: 1.36.0 # alloc
      codecov_token: $(CODECOV_TOKEN_SECRET)
  - job: no_std
    dependsOn: []
