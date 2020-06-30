@@ -1,6 +1,6 @@
-#[cfg(test)]
+#[cfg(any(test, miri))]
 pub(crate) const R: usize = 4;
-#[cfg(not(test))]
+#[cfg(not(any(test, miri)))]
 const R: usize = 8;
 
 use core::iter::FusedIterator;
