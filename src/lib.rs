@@ -49,9 +49,9 @@
 //!
 //! You can see that the standard library implementation (through `hashbrown`) has some pretty
 //! severe latency spikes. This is more readily visible through a timeline latency plot
-//! (`aux/vroom.plt`):
+//! (`misc/vroom.plt`):
 //!
-//! ![latency spikes on resize](aux/vroom.png)
+//! ![latency spikes on resize](misc/vroom.png)
 //!
 //! Resizes happen less frequently as the map grows, but they also take longer _when_ they occur.
 //! With griddle, those spikes are mostly gone. There is a small linear component left, which I
