@@ -72,8 +72,6 @@
 #[macro_use]
 extern crate std;
 
-mod map;
-
 #[cfg(feature = "raw")]
 /// Experimental and unsafe `RawTable` API. This module is only available if the
 /// `raw` feature is enabled.
@@ -86,4 +84,11 @@ pub mod raw {
 #[allow(dead_code)]
 mod raw;
 
-pub use map::HashMap;
+mod map;
+
+pub mod hash_map {
+    //! A hash map implemented with quadratic probing and SIMD lookup.
+    pub use crate::map::*;
+}
+
+pub use crate::map::HashMap;
