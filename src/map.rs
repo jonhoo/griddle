@@ -554,8 +554,10 @@ impl<K, V, S> HashMap<K, V, S> {
                 let &mut (ref key, ref mut value) = item.as_mut();
                 if !f(key, value) {
                     // Erase the element from the table first since drop might panic.
+                    // But read it before the erase in case erase invalidates the memory.
+                    let v = item.read();
                     self.table.erase_no_drop(&item);
-                    item.drop();
+                    drop(v);
                 }
             }
         }
@@ -986,8 +988,10 @@ where
         unsafe {
             let hash = make_hash(&self.hash_builder, &k);
             if let Some(item) = self.table.find(hash, |x| k.eq(x.0.borrow())) {
+                // Read the item before the erase, in case erase reclaims memory.
+                let v = item.read();
                 self.table.erase_no_drop(&item);
-                Some(item.read())
+                Some(v)
             } else {
                 None
             }
@@ -1711,8 +1715,10 @@ impl<'a, K, V, S> OccupiedEntry<'a, K, V, S> {
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn remove_entry(self) -> (K, V) {
         unsafe {
+            // Read the item before the erase, in case erase reclaims memory.
+            let v = self.elem.read();
             self.table.table.erase_no_drop(&self.elem);
-            self.elem.read()
+            v
         }
     }
 
