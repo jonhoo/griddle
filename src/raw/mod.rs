@@ -329,8 +329,9 @@ impl<T> RawTable<T> {
                     // We need to remove the item in this bucket from the old map
                     // to the resized map, without shrinking the old map.
                     let value = unsafe {
+                        let v = e.read();
                         lo.table.erase_no_drop(&e);
-                        e.read()
+                        v
                     };
                     let hash = hasher(&value);
                     self.table.insert(hash, value, &hasher);
