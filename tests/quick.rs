@@ -218,8 +218,7 @@ quickcheck! {
         let mut reference2 = HashMap::new();
         do_ops(&ops2, &mut map2, &mut reference2);
         let should = reference == reference2;
-        assert_eq!(map.len() == map2.len(), should);
-        assert_eq!(map.iter().all(|(k, v)| {
+        assert_eq!(map.len() == map2.len() && map.iter().all(|(k, v)| {
             map2.get(k).map_or(false, |v2| v2 == v)
         }), should);
         true
