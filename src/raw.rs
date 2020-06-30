@@ -82,11 +82,7 @@ impl<T> RawTable<T> {
             // the new table won't _also_ grow while we're still moving items from the old
             // one.
             let need_cap = ((R + 1) / R) * (self.table.len() + 1);
-
-            // We want to favor factor-of-two growing, if that's sufficient, so we don't
-            // use with_capacity (which allocates _exactly_ what we give).
-            let mut new_table = raw::RawTable::new();
-            new_table.reserve(need_cap, |_| unreachable!());
+            let mut new_table = raw::RawTable::with_capacity(need_cap);
 
             let bucket = new_table.insert(hash, value, &hasher);
             let old_table = mem::replace(&mut self.table, new_table);
