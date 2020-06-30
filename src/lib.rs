@@ -72,6 +72,12 @@
 #[macro_use]
 extern crate std;
 
+#[cfg(has_extern_crate_alloc)]
+#[cfg_attr(test, macro_use)]
+extern crate alloc;
+#[cfg(not(has_extern_crate_alloc))]
+extern crate std as alloc;
+
 #[cfg(feature = "raw")]
 /// Experimental and unsafe `RawTable` API. This module is only available if the
 /// `raw` feature is enabled.
@@ -85,12 +91,18 @@ pub mod raw {
 mod raw;
 
 mod map;
+mod set;
 
 pub mod hash_map {
     //! A hash map implemented with quadratic probing and SIMD lookup.
     pub use crate::map::*;
 }
+pub mod hash_set {
+    //! A hash set implemented as a `HashMap` where the value is `()`.
+    pub use crate::set::*;
+}
 
 pub use crate::map::HashMap;
+pub use crate::set::HashSet;
 
 pub use hashbrown::TryReserveError;

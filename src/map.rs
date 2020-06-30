@@ -959,7 +959,7 @@ unsafe impl<K: Send, V: Send> Send for IterMut<'_, K, V> {}
 impl<K, V> IterMut<'_, K, V> {
     /// Returns a iterator of references over the remaining items.
     #[cfg_attr(feature = "inline-more", inline)]
-    fn iter(&self) -> Iter<'_, K, V> {
+    pub(super) fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             inner: self.inner.clone(),
             marker: PhantomData,
@@ -981,7 +981,7 @@ pub struct IntoIter<K, V> {
 impl<K, V> IntoIter<K, V> {
     /// Returns a iterator of references over the remaining items.
     #[cfg_attr(feature = "inline-more", inline)]
-    fn iter(&self) -> Iter<'_, K, V> {
+    pub(super) fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             inner: self.inner.iter(),
             marker: PhantomData,
