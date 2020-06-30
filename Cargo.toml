@@ -34,6 +34,7 @@ serde = [ "serde_", "hashbrown/serde" ]
 rayon = [ "rayon_", "hashbrown/rayon" ]
 ahash = [ "hashbrown/ahash" ]
 ahash-compile-time-rng = [ "hashbrown/ahash-compile-time-rng" ]
+raw = []
 
 # Enables usage of `#[inline]` on far more functions than by default in this
 # crate. This may lead to a performance increase but often comes at a compile
@@ -41,7 +42,7 @@ ahash-compile-time-rng = [ "hashbrown/ahash-compile-time-rng" ]
 inline-more = [ "hashbrown/inline-more" ]
 
 [package.metadata.docs.rs]
-features = ["rayon", "serde"]
+features = ["rayon", "serde", "raw"]
 
 [[bench]]
 name = "vroom"

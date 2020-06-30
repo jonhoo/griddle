@@ -73,6 +73,17 @@
 extern crate std;
 
 mod map;
-pub mod raw;
+
+#[cfg(feature = "raw")]
+/// Experimental and unsafe `RawTable` API. This module is only available if the
+/// `raw` feature is enabled.
+pub mod raw {
+    #[path = "mod.rs"]
+    mod inner;
+    pub use inner::*;
+}
+#[cfg(not(feature = "raw"))]
+#[allow(dead_code)]
+mod raw;
 
 pub use map::HashMap;

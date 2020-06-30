@@ -631,7 +631,7 @@ where
         let hash = make_hash(&self.hash_builder, &k);
         if let Some(item) = self.table.find(hash, |x| k.eq(&x.0)) {
             let v = Some(mem::replace(unsafe { &mut item.as_mut().1 }, v));
-            if item.in_leftovers() {
+            if item.will_move() {
                 debug_assert!(self.table.is_split());
                 let hash_builder = &self.hash_builder;
                 self.table.carry(|x| make_hash(hash_builder, &x.0));

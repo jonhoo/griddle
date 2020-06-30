@@ -7,6 +7,12 @@ use core::iter::FusedIterator;
 use core::mem;
 use hashbrown::raw;
 
+/// A raw hash table with an unsafe API.
+///
+/// This is a wrapper around [`hashbrown::raw::RawTable`] that also implements incremental
+/// resizing. When you interact with this API, keep in mind that there may be two backing tables,
+/// and a lookup may return a reference to _either_. Eventually, entries in the old table will be
+/// reclaimed, which invalidates any references to them.
 #[derive(Clone)]
 pub struct RawTable<T> {
     table: raw::RawTable<T>,
@@ -239,7 +245,8 @@ pub struct Bucket<T> {
 }
 
 impl<T> Bucket<T> {
-    pub fn in_leftovers(&self) -> bool {
+    /// Returns true if this bucket is in the "old" table and will be moved.
+    pub fn will_move(&self) -> bool {
         !self.in_main
     }
 }
@@ -313,6 +320,7 @@ pub struct RawIntoIter<T> {
 }
 
 impl<T> RawIntoIter<T> {
+    /// Returns a by-reference iterator over the remaining items of this iterator.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn iter(&self) -> RawIter<T> {
         RawIter {
