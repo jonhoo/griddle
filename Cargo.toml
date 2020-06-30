@@ -1,6 +1,6 @@
 [package]
 name = "griddle"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -26,6 +26,7 @@ serde_ = { version = "1.0.25", default-features = false, optional = true, packag
 
 [dev-dependencies]
 lazy_static = "1.2"
+rand = { version = "0.7.3", features = ["small_rng"] }
 rayon_ = { version = "1.0", package = "rayon" }
 rustc-hash = "=1.0"
 serde_test = "1.0"

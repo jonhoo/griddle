@@ -1,4 +1,4 @@
-use crate::raw::{RawIntoIter, RawIter, RawTable};
+use crate::raw::{Bucket, RawIntoIter, RawIter, RawTable};
 use crate::TryReserveError;
 use core::borrow::Borrow;
 use core::fmt::{self, Debug};
@@ -8,11 +8,44 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ops::Index;
 
+#[doc(inline)]
 pub use hashbrown::hash_map::DefaultHashBuilder;
 
 /// A `HashMap` variant that spreads resize load across inserts.
 ///
 /// See the [crate-level documentation] for details.
+///
+/// [crate-level documentation]: index.html
+///
+/// The default hashing algorithm is currently [`AHash`], though this is
+/// subject to change at any point in the future. This hash function is very
+/// fast for all types of keys, but this algorithm will typically *not* protect
+/// against attacks such as HashDoS.
+///
+/// The hashing algorithm can be replaced on a per-`HashMap` basis using the
+/// [`default`], [`with_hasher`], and [`with_capacity_and_hasher`] methods. Many
+/// alternative algorithms are available on crates.io, such as the [`fnv`] crate.
+///
+/// It is required that the keys implement the [`Eq`] and [`Hash`] traits, although
+/// this can frequently be achieved by using `#[derive(PartialEq, Eq, Hash)]`.
+/// If you implement these yourself, it is important that the following
+/// property holds:
+///
+/// ```text
+/// k1 == k2 -> hash(k1) == hash(k2)
+/// ```
+///
+/// In other words, if two keys are equal, their hashes must be equal.
+///
+/// It is a logic error for a key to be modified in such a way that the key's
+/// hash, as determined by the [`Hash`] trait, or its equality, as determined by
+/// the [`Eq`] trait, changes while it is in the map. This is normally only
+/// possible through [`Cell`], [`RefCell`], global state, I/O, or unsafe code.
+///
+/// It is also a logic error for the [`Hash`] implementation of a key to panic.
+/// This is generally only possible if the trait is implemented manually. If a
+/// panic does occur then the contents of the `HashMap` may become corrupted and
+/// some items may be dropped from the table.
 ///
 /// # Examples
 ///
@@ -70,7 +103,87 @@ pub use hashbrown::hash_map::DefaultHashBuilder;
 /// }
 /// ```
 ///
-/// [crate-level documentation]: ../
+/// `HashMap` also implements an [`Entry API`](#method.entry), which allows
+/// for more complex methods of getting, setting, updating and removing keys and
+/// their values:
+///
+/// ```
+/// use griddle::HashMap;
+///
+/// // type inference lets us omit an explicit type signature (which
+/// // would be `HashMap<&str, u8>` in this example).
+/// let mut player_stats = HashMap::new();
+///
+/// fn random_stat_buff() -> u8 {
+///     // could actually return some random value here - let's just return
+///     // some fixed value for now
+///     42
+/// }
+///
+/// // insert a key only if it doesn't already exist
+/// player_stats.entry("health").or_insert(100);
+///
+/// // insert a key using a function that provides a new value only if it
+/// // doesn't already exist
+/// player_stats.entry("defence").or_insert_with(random_stat_buff);
+///
+/// // update a key, guarding against the key possibly not being set
+/// let stat = player_stats.entry("attack").or_insert(100);
+/// *stat += random_stat_buff();
+/// ```
+///
+/// The easiest way to use `HashMap` with a custom key type is to derive [`Eq`] and [`Hash`].
+/// We must also derive [`PartialEq`].
+///
+/// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
+/// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
+/// [`PartialEq`]: https://doc.rust-lang.org/std/cmp/trait.PartialEq.html
+/// [`RefCell`]: https://doc.rust-lang.org/std/cell/struct.RefCell.html
+/// [`Cell`]: https://doc.rust-lang.org/std/cell/struct.Cell.html
+/// [`default`]: #method.default
+/// [`with_hasher`]: #method.with_hasher
+/// [`with_capacity_and_hasher`]: #method.with_capacity_and_hasher
+/// [`fnv`]: https://crates.io/crates/fnv
+/// [`AHash`]: https://crates.io/crates/ahash
+///
+/// ```
+/// use griddle::HashMap;
+///
+/// #[derive(Hash, Eq, PartialEq, Debug)]
+/// struct Viking {
+///     name: String,
+///     country: String,
+/// }
+///
+/// impl Viking {
+///     /// Creates a new Viking.
+///     fn new(name: &str, country: &str) -> Viking {
+///         Viking { name: name.to_string(), country: country.to_string() }
+///     }
+/// }
+///
+/// // Use a HashMap to store the vikings' health points.
+/// let mut vikings = HashMap::new();
+///
+/// vikings.insert(Viking::new("Einar", "Norway"), 25);
+/// vikings.insert(Viking::new("Olaf", "Denmark"), 24);
+/// vikings.insert(Viking::new("Harald", "Iceland"), 12);
+///
+/// // Use derived implementation to print the status of the vikings.
+/// for (viking, health) in &vikings {
+///     println!("{:?} has {} hp", viking, health);
+/// }
+/// ```
+///
+/// A `HashMap` with fixed list of elements can be initialized from an array:
+///
+/// ```
+/// use griddle::HashMap;
+///
+/// let timber_resources: HashMap<&str, i32> = [("Norway", 100), ("Denmark", 50), ("Iceland", 10)]
+///     .iter().cloned().collect();
+/// // use the values stored in map
+/// ```
 pub struct HashMap<K, V, S = DefaultHashBuilder> {
     pub(crate) hash_builder: S,
     pub(crate) table: RawTable<(K, V)>,
@@ -78,7 +191,7 @@ pub struct HashMap<K, V, S = DefaultHashBuilder> {
 
 impl<K: Clone, V: Clone, S: Clone> Clone for HashMap<K, V, S> {
     fn clone(&self) -> Self {
-        Self {
+        HashMap {
             hash_builder: self.hash_builder.clone(),
             table: self.table.clone(),
         }
@@ -152,7 +265,7 @@ impl<K, V, S> HashMap<K, V, S> {
     ///
     /// ```
     /// use griddle::HashMap;
-    /// use hashbrown::hash_map::DefaultHashBuilder;
+    /// use griddle::hash_map::DefaultHashBuilder;
     ///
     /// let s = DefaultHashBuilder::default();
     /// let mut map = HashMap::with_hasher(s);
@@ -186,7 +299,7 @@ impl<K, V, S> HashMap<K, V, S> {
     ///
     /// ```
     /// use griddle::HashMap;
-    /// use hashbrown::hash_map::DefaultHashBuilder;
+    /// use griddle::hash_map::DefaultHashBuilder;
     ///
     /// let s = DefaultHashBuilder::default();
     /// let mut map = HashMap::with_capacity_and_hasher(10, s);
@@ -210,7 +323,7 @@ impl<K, V, S> HashMap<K, V, S> {
     ///
     /// ```
     /// use griddle::HashMap;
-    /// use hashbrown::hash_map::DefaultHashBuilder;
+    /// use griddle::hash_map::DefaultHashBuilder;
     ///
     /// let hasher = DefaultHashBuilder::default();
     /// let map: HashMap<i32, i32> = HashMap::with_hasher(hasher);
@@ -569,6 +682,43 @@ where
         let hash_builder = &self.hash_builder;
         self.table
             .shrink_to(min_capacity, |x| make_hash(hash_builder, &x.0));
+    }
+
+    /// Gets the given key's corresponding entry in the map for in-place manipulation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut letters = HashMap::new();
+    ///
+    /// for ch in "a short treatise on fungi".chars() {
+    ///     let counter = letters.entry(ch).or_insert(0);
+    ///     *counter += 1;
+    /// }
+    ///
+    /// assert_eq!(letters[&'s'], 2);
+    /// assert_eq!(letters[&'t'], 3);
+    /// assert_eq!(letters[&'u'], 1);
+    /// assert_eq!(letters.get(&'y'), None);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S> {
+        let hash = make_hash(&self.hash_builder, &key);
+        if let Some(elem) = self.table.find(hash, |q| q.0.eq(&key)) {
+            Entry::Occupied(OccupiedEntry {
+                key: Some(key),
+                elem,
+                table: self,
+            })
+        } else {
+            Entry::Vacant(VacantEntry {
+                hash,
+                key,
+                table: self,
+            })
+        }
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -1054,6 +1204,80 @@ pub struct ValuesMut<'a, K, V> {
     inner: IterMut<'a, K, V>,
 }
 
+/// A view into a single entry in a map, which may either be vacant or occupied.
+///
+/// This `enum` is constructed from the [`entry`] method on [`HashMap`].
+///
+/// [`HashMap`]: struct.HashMap.html
+/// [`entry`]: struct.HashMap.html#method.entry
+pub enum Entry<'a, K, V, S> {
+    /// An occupied entry.
+    Occupied(OccupiedEntry<'a, K, V, S>),
+
+    /// A vacant entry.
+    Vacant(VacantEntry<'a, K, V, S>),
+}
+
+impl<K: Debug, V: Debug, S> Debug for Entry<'_, K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Entry::Vacant(ref v) => f.debug_tuple("Entry").field(v).finish(),
+            Entry::Occupied(ref o) => f.debug_tuple("Entry").field(o).finish(),
+        }
+    }
+}
+
+/// A view into an occupied entry in a `HashMap`.
+/// It is part of the [`Entry`] enum.
+///
+/// [`Entry`]: enum.Entry.html
+pub struct OccupiedEntry<'a, K, V, S> {
+    #[allow(dead_code)] // remove when replace_ methods are implemented
+    key: Option<K>,
+    elem: Bucket<(K, V)>,
+    table: &'a mut HashMap<K, V, S>,
+}
+
+unsafe impl<K, V, S> Send for OccupiedEntry<'_, K, V, S>
+where
+    K: Send,
+    V: Send,
+    S: Send,
+{
+}
+unsafe impl<K, V, S> Sync for OccupiedEntry<'_, K, V, S>
+where
+    K: Sync,
+    V: Sync,
+    S: Sync,
+{
+}
+
+impl<K: Debug, V: Debug, S> Debug for OccupiedEntry<'_, K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OccupiedEntry")
+            .field("key", self.key())
+            .field("value", self.get())
+            .finish()
+    }
+}
+
+/// A view into a vacant entry in a `HashMap`.
+/// It is part of the [`Entry`] enum.
+///
+/// [`Entry`]: enum.Entry.html
+pub struct VacantEntry<'a, K, V, S> {
+    hash: u64,
+    key: K,
+    table: &'a mut HashMap<K, V, S>,
+}
+
+impl<K: Debug, V, S> Debug for VacantEntry<'_, K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("VacantEntry").field(self.key()).finish()
+    }
+}
+
 impl<'a, K, V, S> IntoIterator for &'a HashMap<K, V, S> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
@@ -1256,6 +1480,462 @@ where
     }
 }
 
+impl<'a, K, V, S> Entry<'a, K, V, S> {
+    /// Sets the value of the entry, and returns an OccupiedEntry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// let entry = map.entry("horseyland").insert(37);
+    ///
+    /// assert_eq!(entry.key(), &"horseyland");
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, S>
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            Entry::Occupied(mut entry) => {
+                entry.insert(value);
+                entry
+            }
+            Entry::Vacant(entry) => entry.insert_entry(value),
+        }
+    }
+
+    /// Ensures a value is in the entry by inserting the default if empty, and returns
+    /// a mutable reference to the value in the entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    ///
+    /// map.entry("poneyland").or_insert(3);
+    /// assert_eq!(map["poneyland"], 3);
+    ///
+    /// *map.entry("poneyland").or_insert(10) *= 2;
+    /// assert_eq!(map["poneyland"], 6);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn or_insert(self, default: V) -> &'a mut V
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(default),
+        }
+    }
+
+    /// Ensures a value is in the entry by inserting the result of the default function if empty,
+    /// and returns a mutable reference to the value in the entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, String> = HashMap::new();
+    /// let s = "hoho".to_string();
+    ///
+    /// map.entry("poneyland").or_insert_with(|| s);
+    ///
+    /// assert_eq!(map["poneyland"], "hoho".to_string());
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(default()),
+        }
+    }
+
+    /// Ensures a value is in the entry by inserting, if empty, the result of the default function,
+    /// which takes the key as its argument, and returns a mutable reference to the value in the
+    /// entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, usize> = HashMap::new();
+    ///
+    /// map.entry("poneyland").or_insert_with_key(|key| key.chars().count());
+    ///
+    /// assert_eq!(map["poneyland"], 9);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn or_insert_with_key<F: FnOnce(&K) -> V>(self, default: F) -> &'a mut V
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let value = default(entry.key());
+                entry.insert(value)
+            }
+        }
+    }
+
+    /// Returns a reference to this entry's key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// assert_eq!(map.entry("poneyland").key(), &"poneyland");
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn key(&self) -> &K {
+        match *self {
+            Entry::Occupied(ref entry) => entry.key(),
+            Entry::Vacant(ref entry) => entry.key(),
+        }
+    }
+
+    /// Provides in-place mutable access to an occupied entry before any
+    /// potential inserts into the map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    ///
+    /// map.entry("poneyland")
+    ///    .and_modify(|e| { *e += 1 })
+    ///    .or_insert(42);
+    /// assert_eq!(map["poneyland"], 42);
+    ///
+    /// map.entry("poneyland")
+    ///    .and_modify(|e| { *e += 1 })
+    ///    .or_insert(42);
+    /// assert_eq!(map["poneyland"], 43);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn and_modify<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&mut V),
+    {
+        match self {
+            Entry::Occupied(mut entry) => {
+                f(entry.get_mut());
+                Entry::Occupied(entry)
+            }
+            Entry::Vacant(entry) => Entry::Vacant(entry),
+        }
+    }
+}
+
+impl<'a, K, V: Default, S> Entry<'a, K, V, S> {
+    /// Ensures a value is in the entry by inserting the default value if empty,
+    /// and returns a mutable reference to the value in the entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, Option<u32>> = HashMap::new();
+    /// map.entry("poneyland").or_default();
+    ///
+    /// assert_eq!(map["poneyland"], None);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn or_default(self) -> &'a mut V
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(Default::default()),
+        }
+    }
+}
+
+impl<'a, K, V, S> OccupiedEntry<'a, K, V, S> {
+    /// Gets a reference to the key in the entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// map.entry("poneyland").or_insert(12);
+    /// assert_eq!(map.entry("poneyland").key(), &"poneyland");
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn key(&self) -> &K {
+        unsafe { &self.elem.as_ref().0 }
+    }
+
+    /// Take the ownership of the key and value from the map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// use griddle::hash_map::Entry;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// map.entry("poneyland").or_insert(12);
+    ///
+    /// if let Entry::Occupied(o) = map.entry("poneyland") {
+    ///     // We delete the entry from the map.
+    ///     o.remove_entry();
+    /// }
+    ///
+    /// assert_eq!(map.contains_key("poneyland"), false);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn remove_entry(self) -> (K, V) {
+        unsafe {
+            self.table.table.erase_no_drop(&self.elem);
+            self.elem.read()
+        }
+    }
+
+    /// Gets a reference to the value in the entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// use griddle::hash_map::Entry;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// map.entry("poneyland").or_insert(12);
+    ///
+    /// if let Entry::Occupied(o) = map.entry("poneyland") {
+    ///     assert_eq!(o.get(), &12);
+    /// }
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn get(&self) -> &V {
+        unsafe { &self.elem.as_ref().1 }
+    }
+
+    /// Gets a mutable reference to the value in the entry.
+    ///
+    /// If you need a reference to the `OccupiedEntry` which may outlive the
+    /// destruction of the `Entry` value, see [`into_mut`].
+    ///
+    /// [`into_mut`]: #method.into_mut
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// use griddle::hash_map::Entry;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// map.entry("poneyland").or_insert(12);
+    ///
+    /// assert_eq!(map["poneyland"], 12);
+    /// if let Entry::Occupied(mut o) = map.entry("poneyland") {
+    ///     *o.get_mut() += 10;
+    ///     assert_eq!(*o.get(), 22);
+    ///
+    ///     // We can use the same Entry multiple times.
+    ///     *o.get_mut() += 2;
+    /// }
+    ///
+    /// assert_eq!(map["poneyland"], 24);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn get_mut(&mut self) -> &mut V {
+        unsafe { &mut self.elem.as_mut().1 }
+    }
+
+    /// Converts the OccupiedEntry into a mutable reference to the value in the entry
+    /// with a lifetime bound to the map itself.
+    ///
+    /// If you need multiple references to the `OccupiedEntry`, see [`get_mut`].
+    ///
+    /// [`get_mut`]: #method.get_mut
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// use griddle::hash_map::Entry;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// map.entry("poneyland").or_insert(12);
+    ///
+    /// assert_eq!(map["poneyland"], 12);
+    /// if let Entry::Occupied(o) = map.entry("poneyland") {
+    ///     *o.into_mut() += 10;
+    /// }
+    ///
+    /// assert_eq!(map["poneyland"], 22);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn into_mut(self) -> &'a mut V {
+        unsafe { &mut self.elem.as_mut().1 }
+    }
+
+    /// Sets the value of the entry, and returns the entry's old value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// use griddle::hash_map::Entry;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// map.entry("poneyland").or_insert(12);
+    ///
+    /// if let Entry::Occupied(mut o) = map.entry("poneyland") {
+    ///     assert_eq!(o.insert(15), 12);
+    /// }
+    ///
+    /// assert_eq!(map["poneyland"], 15);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert(&mut self, mut value: V) -> V {
+        let old_value = self.get_mut();
+        mem::swap(&mut value, old_value);
+        value
+    }
+
+    /// Takes the value out of the entry, and returns it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// use griddle::hash_map::Entry;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// map.entry("poneyland").or_insert(12);
+    ///
+    /// if let Entry::Occupied(o) = map.entry("poneyland") {
+    ///     assert_eq!(o.remove(), 12);
+    /// }
+    ///
+    /// assert_eq!(map.contains_key("poneyland"), false);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn remove(self) -> V {
+        self.remove_entry().1
+    }
+
+    // NOTE:
+    // replace_entry and replace_key are _not_ okay, because it may move a bucket in the old
+    // table to _before_ where the "move keys iterator" is currently pointed. in which case we'd
+    // fail to move them.
+    //
+    // it should be possible to work around this by checking if that's the case, and then
+    // restarting the iterator, though that would come at a performance penalty...
+    //
+    // when implemented, remove the #[allow(dead_code)] on OccupiedEntry::key
+}
+
+impl<'a, K, V, S> VacantEntry<'a, K, V, S> {
+    /// Gets a reference to the key that would be used when inserting a value
+    /// through the `VacantEntry`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// assert_eq!(map.entry("poneyland").key(), &"poneyland");
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn key(&self) -> &K {
+        &self.key
+    }
+
+    /// Take ownership of the key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// use griddle::hash_map::Entry;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    ///
+    /// if let Entry::Vacant(v) = map.entry("poneyland") {
+    ///     v.into_key();
+    /// }
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn into_key(self) -> K {
+        self.key
+    }
+
+    /// Sets the value of the entry with the VacantEntry's key,
+    /// and returns a mutable reference to it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    /// use griddle::hash_map::Entry;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    ///
+    /// if let Entry::Vacant(o) = map.entry("poneyland") {
+    ///     o.insert(37);
+    /// }
+    /// assert_eq!(map["poneyland"], 37);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert(self, value: V) -> &'a mut V
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        let hash_builder = &self.table.hash_builder;
+        let bucket = self.table.table.insert(self.hash, (self.key, value), |x| {
+            make_hash(hash_builder, &x.0)
+        });
+        unsafe { &mut bucket.as_mut().1 }
+    }
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V, S>
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        let hash_builder = &self.table.hash_builder;
+        let elem = self.table.table.insert(self.hash, (self.key, value), |x| {
+            make_hash(hash_builder, &x.0)
+        });
+        OccupiedEntry {
+            key: None,
+            elem,
+            table: self.table,
+        }
+    }
+}
+
 impl<K, V, S> FromIterator<(K, V)> for HashMap<K, V, S>
 where
     K: Eq + Hash,
@@ -1347,8 +2027,10 @@ fn assert_covariance() {
 #[cfg(test)]
 mod test_map {
     use super::DefaultHashBuilder;
+    use super::Entry::{Occupied, Vacant};
     use super::HashMap;
     use crate::TryReserveError::*;
+    use rand::{rngs::SmallRng, Rng, SeedableRng};
     use std::cell::RefCell;
     use std::usize;
     use std::vec::Vec;
@@ -1660,6 +2342,17 @@ mod test_map {
     fn test_empty_remove() {
         let mut m: HashMap<i32, bool> = HashMap::new();
         assert_eq!(m.remove(&0), None);
+    }
+
+    #[test]
+    fn test_empty_entry() {
+        let mut m: HashMap<i32, bool> = HashMap::new();
+        match m.entry(0) {
+            Occupied(_) => panic!(),
+            Vacant(_) => {}
+        }
+        assert!(*m.entry(0).or_insert(true));
+        assert_eq!(m.len(), 1);
     }
 
     #[test]
@@ -2115,6 +2808,104 @@ mod test_map {
     }
 
     #[test]
+    fn test_entry() {
+        let xs = (1..9).map(|v| (v, 10 * v));
+
+        let mut map: HashMap<_, _> = xs.clone().collect();
+
+        // Existing key (insert)
+        match map.entry(1) {
+            Vacant(_) => unreachable!(),
+            Occupied(mut view) => {
+                assert_eq!(view.get(), &10);
+                assert_eq!(view.insert(100), 10);
+            }
+        }
+        assert_eq!(map.get(&1).unwrap(), &100);
+        assert_eq!(map.len(), 8);
+
+        // Existing key (update; old table)
+        match map.entry(2) {
+            Vacant(_) => unreachable!(),
+            Occupied(mut view) => {
+                let v = view.get_mut();
+                let new_v = (*v) * 10;
+                *v = new_v;
+            }
+        }
+        assert_eq!(map.get(&2).unwrap(), &200);
+        assert_eq!(map.len(), 8);
+
+        // Existing key (update; new table)
+        match map.entry(8) {
+            Vacant(_) => unreachable!(),
+            Occupied(mut view) => {
+                let v = view.get_mut();
+                let new_v = (*v) * 10;
+                *v = new_v;
+            }
+        }
+        assert_eq!(map.get(&8).unwrap(), &800);
+        assert_eq!(map.len(), 8);
+
+        // Existing key (take)
+        match map.entry(3) {
+            Vacant(_) => unreachable!(),
+            Occupied(view) => {
+                assert_eq!(view.remove(), 30);
+            }
+        }
+        assert_eq!(map.get(&3), None);
+        assert_eq!(map.len(), 7);
+
+        // Inexistent key (insert)
+        match map.entry(10) {
+            Occupied(_) => unreachable!(),
+            Vacant(view) => {
+                assert_eq!(*view.insert(1000), 1000);
+            }
+        }
+        assert_eq!(map.get(&10).unwrap(), &1000);
+        assert_eq!(map.len(), 8);
+    }
+
+    #[test]
+    fn test_entry_take_doesnt_corrupt() {
+        #![allow(deprecated)] //rand
+                              // Test for #19292
+        fn check(m: &HashMap<i32, ()>) {
+            for k in m.keys() {
+                assert!(m.contains_key(k), "{} is in keys() but not in the map?", k);
+            }
+        }
+
+        let mut m = HashMap::new();
+
+        let mut rng = {
+            let seed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+            SmallRng::from_seed(seed)
+        };
+
+        // Populate the map with some items.
+        for _ in 0..50 {
+            let x = rng.gen_range(-10, 10);
+            m.insert(x, ());
+        }
+
+        for _ in 0..1000 {
+            let x = rng.gen_range(-10, 10);
+            match m.entry(x) {
+                Vacant(_) => {}
+                Occupied(e) => {
+                    e.remove();
+                }
+            }
+
+            check(&m);
+        }
+    }
+
+    #[test]
     fn test_extend_ref() {
         let mut a = HashMap::new();
         a.insert(1, "one");
@@ -2153,6 +2944,42 @@ mod test_map {
         // Insert at capacity should cause allocation.
         a.insert(item, 0);
         assert!(a.capacity() > a.len());
+    }
+
+    #[test]
+    fn test_occupied_entry_key() {
+        let mut a = HashMap::new();
+        let key = "hello there";
+        let value = "value goes here";
+        assert!(a.is_empty());
+        a.insert(key.clone(), value.clone());
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[key], value);
+
+        match a.entry(key.clone()) {
+            Vacant(_) => panic!(),
+            Occupied(e) => assert_eq!(key, *e.key()),
+        }
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[key], value);
+    }
+
+    #[test]
+    fn test_vacant_entry_key() {
+        let mut a = HashMap::new();
+        let key = "hello there";
+        let value = "value goes here";
+
+        assert!(a.is_empty());
+        match a.entry(key.clone()) {
+            Occupied(_) => panic!(),
+            Vacant(e) => {
+                assert_eq!(key, *e.key());
+                e.insert(value.clone());
+            }
+        }
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[key], value);
     }
 
     #[test]
