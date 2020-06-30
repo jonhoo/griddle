@@ -71,10 +71,6 @@
 #[macro_use]
 extern crate std;
 
-#[cfg(feature = "nightly")]
-#[cfg(doctest)]
-doc_comment::doctest!("../README.md");
-
 use core::borrow::Borrow;
 use core::fmt::{self, Debug};
 use core::hash::{BuildHasher, Hash, Hasher};
