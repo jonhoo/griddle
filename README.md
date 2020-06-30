@@ -67,6 +67,7 @@ believe comes from the work required to find the buckets that hold elements that
 
 You can amortize the cost of making hashbrowns by using a griddle..?
 
+[`hashbrown`]: https://crates.io/crates/hashbrown
 [significant spikes]: https://twitter.com/jonhoo/status/1277618908355313670
 
 ## License

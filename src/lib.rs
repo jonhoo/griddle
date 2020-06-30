@@ -61,6 +61,7 @@
 //!
 //! You can amortize the cost of making hashbrowns by using a griddle..?
 //!
+//! [`hashbrown`]: https://crates.io/crates/hashbrown
 //! [significant spikes]: https://twitter.com/jonhoo/status/1277618908355313670
 
 #![no_std]
@@ -155,7 +156,7 @@ struct OldTable<T> {
 /// }
 /// ```
 ///
-/// [`HashMap`]: struct.HashMap.html
+/// [crate-level documentation]: ../
 pub struct HashMap<K, V, S = DefaultHashBuilder> {
     hash_builder: S,
     table: RawTable<(K, V)>,
