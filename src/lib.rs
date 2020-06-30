@@ -1886,7 +1886,7 @@ mod test_map {
     #[test]
     fn test_keys() {
         let mut map = HashMap::new();
-        for (k, v) in (1..).zip('a'..).take(8) {
+        for (k, v) in (1..).zip(1000..).take(8) {
             map.insert(k, v);
         }
         assert!(map.is_split());
@@ -1900,13 +1900,13 @@ mod test_map {
     #[test]
     fn test_values() {
         let mut map = HashMap::new();
-        for (k, v) in (1..).zip('a'..).take(8) {
+        for (k, v) in (1..).zip(1000..).take(8) {
             map.insert(k, v);
         }
         assert!(map.is_split());
         let values: Vec<_> = map.values().cloned().collect();
         assert_eq!(values.len(), 8);
-        for c in 'a'..='g' {
+        for c in 1000..=1007 {
             assert!(values.contains(&c));
         }
     }
@@ -1962,18 +1962,18 @@ mod test_map {
     #[test]
     fn test_eq() {
         let mut m1 = HashMap::new();
-        for (k, v) in (1..).zip('a'..).take(8) {
+        for (k, v) in (1..).zip(1000..).take(8) {
             m1.insert(k, v);
         }
 
         let mut m2 = HashMap::new();
-        for (k, v) in (1..).zip('a'..).take(7) {
+        for (k, v) in (1..).zip(1000..).take(7) {
             m2.insert(k, v);
         }
 
         assert!(m1 != m2);
 
-        m2.insert(8, 'h');
+        m2.insert(8, 1007);
 
         assert_eq!(m1, m2);
     }
