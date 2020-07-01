@@ -56,3 +56,6 @@ features = ["rayon", "serde", "raw"]
 [[bench]]
 name = "vroom"
 harness = false
+
+[patch.crates-io]
+hashbrown = { git = "https://github.com/rust-lang/hashbrown.git" }

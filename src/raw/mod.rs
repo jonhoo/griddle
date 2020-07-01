@@ -86,13 +86,13 @@ impl<T> RawTable<T> {
         }
     }
 
-    /// Erases an element from the table without dropping it.
+    /// Erases and drops an element from the table.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn erase_no_drop(&mut self, item: &Bucket<T>) {
+    pub unsafe fn erase(&mut self, item: Bucket<T>) {
         if item.in_main {
-            self.table.erase_no_drop(item);
+            self.table.erase(item.bucket);
         } else if let Some(ref mut lo) = self.leftovers {
-            lo.table.erase_no_drop(item);
+            lo.table.erase(item.bucket);
 
             if lo.table.len() == 0 {
                 let _ = self.leftovers.take();
@@ -105,6 +105,32 @@ impl<T> RawTable<T> {
                 // left in our wake from the moves so far.
                 lo.items = lo.table.iter();
             }
+        } else {
+            unreachable!("invalid bucket state");
+        }
+    }
+
+    /// Removes and returns an element from the table.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub unsafe fn remove(&mut self, item: Bucket<T>) -> T {
+        if item.in_main {
+            self.table.remove(item.bucket)
+        } else if let Some(ref mut lo) = self.leftovers {
+            let v = lo.table.remove(item.bucket);
+
+            if lo.table.len() == 0 {
+                let _ = self.leftovers.take();
+            } else {
+                // By changing the state of the table, we have invalidated the table iterator
+                // we keep for what elements are left to move. So, we re-compute it.
+                //
+                // TODO: We should be able to "fix up" the iterator rather than replace it,
+                // which would save us from iterating over the prefix of empty buckets we've
+                // left in our wake from the moves so far.
+                lo.items = lo.table.iter();
+            }
+
+            v
         } else {
             unreachable!("invalid bucket state");
         }
@@ -401,12 +427,11 @@ impl<T> RawTable<T> {
             while let Some(e) = lo.items.next() {
                 // We need to remove the item in this bucket from the old map
                 // to the resized map, without shrinking the old map.
-                let value = unsafe { e.read() };
+                let value = unsafe { lo.table.remove(e) };
                 let hash = hasher(&value);
                 self.table.insert(hash, value, &hasher);
             }
             // The resize is finally fully complete.
-            lo.table.clear_no_drop();
             let _ = self.leftovers.take();
         }
     }
@@ -426,11 +451,7 @@ impl<T> RawTable<T> {
                 if let Some(e) = lo.items.next() {
                     // We need to remove the item in this bucket from the old map
                     // to the resized map, without shrinking the old map.
-                    let value = unsafe {
-                        let v = e.read();
-                        lo.table.erase_no_drop(&e);
-                        v
-                    };
+                    let value = unsafe { lo.table.remove(e) };
                     let hash = hasher(&value);
                     self.table.insert(hash, value, &hasher);
                 } else {
