@@ -47,6 +47,7 @@ impl<T> core::ops::Deref for Bucket<T> {
 /// resizing. When you interact with this API, keep in mind that there may be two backing tables,
 /// and a lookup may return a reference to _either_. Eventually, entries in the old table will be
 /// reclaimed, which invalidates any references to them.
+#[derive(Clone)]
 pub struct RawTable<T> {
     table: raw::RawTable<T>,
     leftovers: Option<raw::RawIntoIter<T>>,
@@ -411,7 +412,7 @@ impl<T> RawTable<T> {
                 }
             }
 
-            if lo.table.len() == 0 {
+            if lo.len() == 0 {
                 // The resize is finally fully complete.
                 let _ = self.leftovers.take();
             }
