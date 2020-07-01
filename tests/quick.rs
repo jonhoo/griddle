@@ -93,6 +93,7 @@ enum Op<K, V> {
     AddEntry(K, V),
     RemoveEntry(K),
     ShrinkToFit,
+    ReplaceWithClone,
     Reserve(u16),
 }
 
@@ -108,6 +109,7 @@ where
             2 => Remove(K::arbitrary(g)),
             3 => RemoveEntry(K::arbitrary(g)),
             4 => ShrinkToFit,
+            5 => ReplaceWithClone,
             _ => Reserve(g.gen::<u16>()),
         }
     }
@@ -117,7 +119,7 @@ fn do_ops<K, V, S>(ops: &[Op<K, V>], a: &mut GriddleMap<K, V, S>, b: &mut HashMa
 where
     K: Hash + Eq + Clone,
     V: Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
 {
     for op in ops {
         match *op {
@@ -144,6 +146,10 @@ where
             ShrinkToFit => {
                 a.shrink_to_fit();
                 b.shrink_to_fit();
+            }
+            ReplaceWithClone => {
+                *a = a.clone();
+                *b = b.clone();
             }
             Reserve(n) => {
                 a.reserve(n as usize);
