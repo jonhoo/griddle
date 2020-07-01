@@ -34,6 +34,9 @@
 //!  - Memory is not reclaimed immediately upon resize.
 //!  - Reads and removals of **old** or **missing** keys are slower for a while after a resize.
 //!  - The incremental map is slightly larger on the stack.
+//!  - The "efficiency" of the resize is slightly lower as the all-at-once resize moves the items
+//!    from the small table to the large one in batch, whereas the incremental does a series of
+//!    inserts.
 //!
 //! Under the hood, griddle uses `hashbrown::raw` to avoid re-implementing the core pieces of
 //! `hashbrown`. It also stays _very_ close to `hashbrown`'s `HashMap` and `HashSet` wrappers, and
