@@ -3,6 +3,8 @@ jobs:
    parameters:
      minrust: 1.36.0 # alloc
      codecov_token: $(CODECOV_TOKEN_SECRET)
+     env:
+       QUICKCHECK_TESTS: 500
  - job: no_std
    dependsOn: []
    displayName: "Compile-check on no_std target"

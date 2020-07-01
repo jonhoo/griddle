@@ -92,6 +92,8 @@ enum Op<K, V> {
     Remove(K),
     AddEntry(K, V),
     RemoveEntry(K),
+    ShrinkToFit,
+    Reserve(u16),
 }
 
 impl<K, V> Arbitrary for Op<K, V>
@@ -100,11 +102,13 @@ where
     V: Arbitrary,
 {
     fn arbitrary<G: Gen>(g: &mut G) -> Self {
-        match g.gen::<u32>() % 4 {
+        match g.gen::<u32>() % 6 {
             0 => Add(K::arbitrary(g), V::arbitrary(g)),
             1 => AddEntry(K::arbitrary(g), V::arbitrary(g)),
             2 => Remove(K::arbitrary(g)),
-            _ => RemoveEntry(K::arbitrary(g)),
+            3 => RemoveEntry(K::arbitrary(g)),
+            4 => ShrinkToFit,
+            _ => Reserve(g.gen::<u16>()),
         }
     }
 }
@@ -136,6 +140,14 @@ where
                 if let HEntry::Occupied(ent) = b.entry(k.clone()) {
                     ent.remove_entry();
                 }
+            }
+            ShrinkToFit => {
+                a.shrink_to_fit();
+                b.shrink_to_fit();
+            }
+            Reserve(n) => {
+                a.reserve(n as usize);
+                b.reserve(n as usize);
             }
         }
         //println!("{:?}", a);
