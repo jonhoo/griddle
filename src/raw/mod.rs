@@ -180,14 +180,13 @@ impl<T> RawTable<T> {
     pub fn insert(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
         let bucket = if self.leftovers.is_some() {
             let bucket = if cfg!(debug_assertions) {
-                let cap = self.table.capacity();
+                let buckets = self.table.buckets();
                 let b = self.table.insert(hash, value, &hasher);
 
                 // make sure table didn't resize
-                // the +1 is because the insertion may have discovered that it was able to re-use a
-                // tombstone, in which it realizes its capacity is actually one greater.
-                assert!(
-                    cap <= self.table.capacity() + 1,
+                assert_eq!(
+                    buckets,
+                    self.table.buckets(),
                     "resize while elements are still left over"
                 );
                 b
