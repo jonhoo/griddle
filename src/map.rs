@@ -591,6 +591,9 @@ where
     /// in the `HashMap`. The collection may reserve more space to avoid
     /// frequent reallocations.
     ///
+    /// While we try to make this incremental where possible,
+    /// it may require all-at-once resizing.
+    ///
     /// # Panics
     ///
     /// Panics if the new allocation size overflows [`usize`].
@@ -614,6 +617,9 @@ where
     /// Tries to reserve capacity for at least `additional` more elements to be inserted
     /// in the given `HashMap<K,V>`. The collection may reserve more space to avoid
     /// frequent reallocations.
+    ///
+    /// While we try to make this incremental where possible,
+    /// it may require all-at-once resizing.
     ///
     /// # Errors
     ///

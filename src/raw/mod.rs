@@ -5,7 +5,7 @@ const R: usize = 8;
 
 use core::iter::FusedIterator;
 use core::mem;
-use hashbrown::raw;
+use hashbrown::{raw, TryReserveError};
 
 /// A reference to a hash table bucket containing a `T`.
 ///
@@ -151,26 +151,78 @@ impl<T> RawTable<T> {
 
     /// Ensures that at least `additional` items can be inserted into the table
     /// without reallocation.
+    ///
+    /// While we try to make this incremental where possible, it may require all-at-once resizing.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn reserve(&mut self, additional: usize, hasher: impl Fn(&T) -> u64) {
-        self.table.reserve(
-            self.leftovers.as_ref().map_or(0, |t| t.table.len()) + additional,
-            hasher,
-        )
+        let need = self.leftovers.as_ref().map_or(0, |t| t.table.len()) + additional;
+        if self.table.capacity() - self.table.len() > need {
+            // We can accommodate the additional items without resizing, so all is well.
+            if cfg!(debug_assertions) {
+                let buckets = self.table.buckets();
+                self.table.reserve(need, |_| unreachable!());
+                assert_eq!(
+                    buckets,
+                    self.table.buckets(),
+                    "resize despite sufficient capacity"
+                );
+            } else {
+                self.table.reserve(need, |_| unreachable!());
+            }
+        } else if self.leftovers.is_some() {
+            // We probably have to resize, but we already have leftovers!
+            //
+            // Here, we're sort of stuck — we can't do this fully incrementally, because we'd need
+            // to keep _three_ tables: the current leftovers, the current table (which would become
+            // the new leftovers), _and_ the new, resized table.
+            //
+            // We do the best we can, which is to carry over all the current leftovers, and _then_
+            // do an incremental resize. This at least moves only the current leftovers, rather
+            // than the current full set of elements.
+            self.carry_all(hasher);
+            self.grow(additional);
+        } else {
+            // We probably have to resize, but since we don't have any leftovers, we can do it
+            // incrementally.
+            self.grow(additional);
+        }
     }
 
     /// Tries to ensure that at least `additional` items can be inserted into
     /// the table without reallocation.
+    ///
+    /// While we try to make this incremental where possible, it may require all-at-once resizing.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn try_reserve(
         &mut self,
         additional: usize,
         hasher: impl Fn(&T) -> u64,
-    ) -> Result<(), hashbrown::TryReserveError> {
-        self.table.try_reserve(
-            self.leftovers.as_ref().map_or(0, |t| t.table.len()) + additional,
-            hasher,
-        )
+    ) -> Result<(), TryReserveError> {
+        let need = self.leftovers.as_ref().map_or(0, |t| t.table.len()) + additional;
+        if self.table.capacity() - self.table.len() > need {
+            // we can accommodate the additional items without resizing, so all good
+            if cfg!(debug_assertions) {
+                let buckets = self.table.buckets();
+                self.table
+                    .try_reserve(need, |_| unreachable!())
+                    .expect("resize despite sufficient capacity");
+                assert_eq!(
+                    buckets,
+                    self.table.buckets(),
+                    "resize despite sufficient capacity"
+                );
+            } else {
+                self.table
+                    .try_reserve(need, |_| unreachable!())
+                    .expect("resize despite sufficient capacity");
+            }
+            Ok(())
+        } else if self.leftovers.is_some() {
+            self.carry_all(hasher);
+            self.try_grow(additional, true)
+        } else {
+            self.try_grow(additional, true)
+        }
     }
 
     /// Inserts a new element into the table.
@@ -199,38 +251,8 @@ impl<T> RawTable<T> {
         } else if self.table.capacity() == self.table.len() {
             // Even though this _may_ succeed without growing due to tombstones, handling
             // that case is convoluted, so we just assume this would grow the map.
-            //
-            // We need to grow the table by at least a factor of (R + 1)/R to ensure that
-            // the new table won't _also_ grow while we're still moving items from the old
-            // one.
-            //
-            // Here's how we get to len * (R + 1)/R:
-            //  - We need to move another len items
-            let need = self.table.len();
-            //  - We move R items on each insert, so to move len items takes
-            //    len / R inserts (rounded up!)
-            //  - Since we want to round up, we pull the old +R-1 trick
-            let inserts = (self.table.len() + R - 1) / R;
-            //  - That's len + len/R
-            //    Which is == R*len/R + len/R
-            //    Which is == ((R+1)*len)/R
-            //    Which is == len * (R+1)/R
-            //  - We don't actually use that formula because of integer division.
-            //
-            // We don't normally need to do +1 here to account for the ongoing insert, since
-            // that'll be wrapped up in `inserts`. But we do anyway to handle the case where
-            // the table is _currently_ empty.
-            let mut new_table = raw::RawTable::with_capacity(need + inserts + 1);
-
-            let bucket = new_table.insert(hash, value, &hasher);
-            let old_table = mem::replace(&mut self.table, new_table);
-            let old_table_items = unsafe { old_table.iter() };
-            self.leftovers = Some(OldTable {
-                table: old_table,
-                items: old_table_items,
-            });
-            self.carry(hasher);
-            bucket
+            self.grow(1);
+            return self.insert(hash, value, hasher);
         } else {
             self.table.insert(hash, value, hasher)
         };
@@ -312,6 +334,81 @@ impl<T: Clone> RawTable<T> {
 }
 
 impl<T> RawTable<T> {
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self, extra: usize) {
+        if let Err(_) = self.try_grow(extra, false) {
+            unsafe { core::hint::unreachable_unchecked() };
+        }
+    }
+
+    #[cold]
+    fn try_grow(&mut self, extra: usize, fallible: bool) -> Result<(), TryReserveError> {
+        debug_assert!(self.leftovers.is_none());
+
+        // We need to grow the table by at least a factor of (R + 1)/R to ensure that
+        // the new table won't _also_ grow while we're still moving items from the old
+        // one.
+        //
+        // Here's how we get to len * (R + 1)/R:
+        //  - We need to move another len items
+        let need = self.table.len();
+        //  - We move R items on each insert, so to move len items takes
+        //    len / R inserts (rounded up!)
+        //  - Since we want to round up, we pull the old +R-1 trick
+        let inserts = (self.table.len() + R - 1) / R;
+        //  - That's len + len/R
+        //    Which is == R*len/R + len/R
+        //    Which is == ((R+1)*len)/R
+        //    Which is == len * (R+1)/R
+        //  - We don't actually use that formula because of integer division.
+        //
+        // We also need to make sure we can fit the additional capacity required for `extra`.
+        // Normally, that'll be handled by `inserts`, but not always!
+        let add = usize::max(extra, inserts);
+        let new_table = if fallible {
+            // TODO: https://github.com/rust-lang/hashbrown/issues/169
+            let mut new_table = raw::RawTable::new();
+            new_table.try_reserve(need + inserts + add, |_| {
+                unreachable!("hasher should not be needed for empty resize")
+            })?;
+            new_table
+        } else {
+            raw::RawTable::with_capacity(need + inserts + add)
+        };
+        let old_table = mem::replace(&mut self.table, new_table);
+        let old_table_items = unsafe { old_table.iter() };
+        self.leftovers = Some(OldTable {
+            table: old_table,
+            items: old_table_items,
+        });
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn carry_all(&mut self, hasher: impl Fn(&T) -> u64) {
+        if let Some(ref mut lo) = self.leftovers {
+            // It is safe to continue to access this iterator because:
+            //  - we have not de-allocated the table it points into
+            //  - we have not grown or shrunk the table it points into
+            //
+            // NOTE: Calling next here could be expensive, as the iter needs to search for the
+            // next non-empty bucket. as the map grows in size, that search time will increase
+            // linearly.
+            while let Some(e) = lo.items.next() {
+                // We need to remove the item in this bucket from the old map
+                // to the resized map, without shrinking the old map.
+                let value = unsafe { e.read() };
+                let hash = hasher(&value);
+                self.table.insert(hash, value, &hasher);
+            }
+            // The resize is finally fully complete.
+            lo.table.clear_no_drop();
+            let _ = self.leftovers.take();
+        }
+    }
+
     #[cold]
     #[inline(never)]
     pub(crate) fn carry(&mut self, hasher: impl Fn(&T) -> u64) {
