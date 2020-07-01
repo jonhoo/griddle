@@ -436,8 +436,13 @@ impl<T> RawTable<T> {
                 } else {
                     // The resize is finally fully complete.
                     let _ = self.leftovers.take();
-                    break;
+                    return;
                 }
+            }
+
+            if lo.table.len() == 0 {
+                // The resize is finally fully complete.
+                let _ = self.leftovers.take();
             }
         }
     }
