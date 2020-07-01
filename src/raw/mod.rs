@@ -86,17 +86,35 @@ impl<T> RawTable<T> {
         }
     }
 
-    /// Erases an element from the table without dropping it.
+    /// Erases and drops an element from the table.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn erase_no_drop(&mut self, item: &Bucket<T>) {
+    pub unsafe fn erase(&mut self, item: Bucket<T>) {
         if item.in_main {
-            self.table.erase_no_drop(item);
+            self.table.erase(item.bucket);
         } else if let Some(ref mut lo) = self.leftovers {
-            lo.erase_no_drop(item);
+            lo.erase(item.bucket);
 
             if lo.len() == 0 {
                 let _ = self.leftovers.take();
             }
+        } else {
+            unreachable!("invalid bucket state");
+        }
+    }
+
+    /// Removes and returns an element from the table.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub unsafe fn remove(&mut self, item: Bucket<T>) -> T {
+        if item.in_main {
+            self.table.remove(item.bucket)
+        } else if let Some(ref mut lo) = self.leftovers {
+            let v = lo.remove(item.bucket);
+
+            if lo.len() == 0 {
+                let _ = self.leftovers.take();
+            }
+
+            v
         } else {
             unreachable!("invalid bucket state");
         }
