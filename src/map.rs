@@ -189,6 +189,7 @@ pub struct HashMap<K, V, S = DefaultHashBuilder> {
     pub(crate) table: RawTable<(K, V)>,
 }
 
+/*
 impl<K: Clone, V: Clone, S: Clone> Clone for HashMap<K, V, S> {
     fn clone(&self) -> Self {
         HashMap {
@@ -204,6 +205,7 @@ impl<K: Clone, V: Clone, S: Clone> Clone for HashMap<K, V, S> {
         self.hash_builder.clone_from(&source.hash_builder);
     }
 }
+*/
 
 #[cfg_attr(feature = "inline-more", inline)]
 pub(crate) fn make_hash<K: Hash + ?Sized>(hash_builder: &impl BuildHasher, val: &K) -> u64 {
@@ -2169,6 +2171,7 @@ mod test_map {
         }
     }
 
+    /*
     #[test]
     fn test_clone() {
         let mut m = HashMap::new();
@@ -2199,6 +2202,7 @@ mod test_map {
         }
         assert_eq!(m2.len(), 8);
     }
+    */
 
     thread_local! { static DROP_VECTOR: RefCell<Vec<i32>> = RefCell::new(Vec::new()) }
 
@@ -2290,6 +2294,7 @@ mod test_map {
         });
     }
 
+    /*
     #[test]
     fn test_into_iter_drops() {
         DROP_VECTOR.with(|v| {
@@ -2350,6 +2355,7 @@ mod test_map {
             }
         });
     }
+    */
 
     #[test]
     fn test_empty_remove() {

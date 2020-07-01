@@ -47,10 +47,9 @@ impl<T> core::ops::Deref for Bucket<T> {
 /// resizing. When you interact with this API, keep in mind that there may be two backing tables,
 /// and a lookup may return a reference to _either_. Eventually, entries in the old table will be
 /// reclaimed, which invalidates any references to them.
-#[derive(Clone)]
 pub struct RawTable<T> {
     table: raw::RawTable<T>,
-    leftovers: Option<OldTable<T>>,
+    leftovers: Option<raw::RawIntoIter<T>>,
 }
 
 impl<T> RawTable<T> {
@@ -92,30 +91,13 @@ impl<T> RawTable<T> {
         if item.in_main {
             self.table.erase_no_drop(item);
         } else if let Some(ref mut lo) = self.leftovers {
-            lo.table.erase_no_drop(item);
+            lo.erase_no_drop(item);
 
-            if lo.table.len() == 0 {
+            if lo.len() == 0 {
                 let _ = self.leftovers.take();
-            } else {
-                // By changing the state of the table, we have invalidated the table iterator
-                // we keep for what elements are left to move. So, we re-compute it.
-                //
-                // TODO: We should be able to "fix up" the iterator rather than replace it,
-                // which would save us from iterating over the prefix of empty buckets we've
-                // left in our wake from the moves so far.
-                lo.items = lo.table.iter();
             }
         } else {
             unreachable!("invalid bucket state");
-        }
-    }
-
-    /// Marks all table buckets as empty without dropping their contents.
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn clear_no_drop(&mut self) {
-        self.table.clear_no_drop();
-        if let Some(mut lo) = self.leftovers.take() {
-            lo.table.clear_no_drop();
         }
     }
 
@@ -139,11 +121,11 @@ impl<T> RawTable<T> {
         // are still leftovers.
         if let Some(ref lo) = self.leftovers {
             // We need to move another lo.table.len() items.
-            need += lo.table.len();
+            need += lo.len();
             // We move R items on each insert.
             // That means we need to accomodate another
             // lo.table.len() / R (rounded up) inserts to move them all.
-            need += (lo.table.len() + R - 1) / R;
+            need += (lo.len() + R - 1) / R;
         }
         let min_size = usize::max(need, min_size);
         self.table.shrink_to(min_size, hasher);
@@ -155,7 +137,7 @@ impl<T> RawTable<T> {
     /// While we try to make this incremental where possible, it may require all-at-once resizing.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn reserve(&mut self, additional: usize, hasher: impl Fn(&T) -> u64) {
-        let need = self.leftovers.as_ref().map_or(0, |t| t.table.len()) + additional;
+        let need = self.leftovers.as_ref().map_or(0, |t| t.len()) + additional;
         if self.table.capacity() - self.table.len() > need {
             // We can accommodate the additional items without resizing, so all is well.
             if cfg!(debug_assertions) {
@@ -198,7 +180,7 @@ impl<T> RawTable<T> {
         additional: usize,
         hasher: impl Fn(&T) -> u64,
     ) -> Result<(), TryReserveError> {
-        let need = self.leftovers.as_ref().map_or(0, |t| t.table.len()) + additional;
+        let need = self.leftovers.as_ref().map_or(0, |t| t.len()) + additional;
         if self.table.capacity() - self.table.len() > need {
             // we can accommodate the additional items without resizing, so all good
             if cfg!(debug_assertions) {
@@ -273,8 +255,8 @@ impl<T> RawTable<T> {
             });
         }
 
-        if let Some(OldTable { ref table, .. }) = self.leftovers {
-            table.find(hash, eq).map(|bucket| Bucket {
+        if let Some(ref iter) = self.leftovers {
+            iter.find(hash, eq).map(|bucket| Bucket {
                 bucket,
                 in_main: false,
             })
@@ -295,7 +277,7 @@ impl<T> RawTable<T> {
     /// Returns the number of elements in the table.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn len(&self) -> usize {
-        self.table.len() + self.leftovers.as_ref().map_or(0, |t| t.table.len())
+        self.table.len() + self.leftovers.as_ref().map_or(0, |t| t.len())
     }
 
     /// Returns the number of buckets in the table.
@@ -312,7 +294,7 @@ impl<T> RawTable<T> {
     pub unsafe fn iter(&self) -> RawIter<T> {
         RawIter {
             table: self.table.iter(),
-            leftovers: self.leftovers.as_ref().map(|lo| lo.items.clone()),
+            leftovers: self.leftovers.as_ref().map(|lo| lo.iter()),
         }
     }
 }
@@ -378,11 +360,7 @@ impl<T> RawTable<T> {
         };
         let old_table = mem::replace(&mut self.table, new_table);
         if old_table.len() != 0 {
-            let old_table_items = unsafe { old_table.iter() };
-            self.leftovers = Some(OldTable {
-                table: old_table,
-                items: old_table_items,
-            });
+            self.leftovers = Some(old_table.into_iter());
         }
         Ok(())
     }
@@ -398,15 +376,13 @@ impl<T> RawTable<T> {
             // NOTE: Calling next here could be expensive, as the iter needs to search for the
             // next non-empty bucket. as the map grows in size, that search time will increase
             // linearly.
-            while let Some(e) = lo.items.next() {
+            while let Some(value) = lo.next() {
                 // We need to remove the item in this bucket from the old map
                 // to the resized map, without shrinking the old map.
-                let value = unsafe { e.read() };
                 let hash = hasher(&value);
                 self.table.insert(hash, value, &hasher);
             }
             // The resize is finally fully complete.
-            lo.table.clear_no_drop();
             let _ = self.leftovers.take();
         }
     }
@@ -423,14 +399,9 @@ impl<T> RawTable<T> {
                 // NOTE: Calling next here could be expensive, as the iter needs to search for the
                 // next non-empty bucket. as the map grows in size, that search time will increase
                 // linearly.
-                if let Some(e) = lo.items.next() {
+                if let Some(value) = lo.next() {
                     // We need to remove the item in this bucket from the old map
                     // to the resized map, without shrinking the old map.
-                    let value = unsafe {
-                        let v = e.read();
-                        lo.table.erase_no_drop(&e);
-                        v
-                    };
                     let hash = hasher(&value);
                     self.table.insert(hash, value, &hasher);
                 } else {
@@ -457,8 +428,8 @@ impl<T> RawTable<T> {
     }
 
     #[cfg(any(test, feature = "rayon"))]
-    pub(crate) fn leftovers(&self) -> Option<&raw::RawTable<T>> {
-        self.leftovers.as_ref().map(|lo| &lo.table)
+    pub(crate) fn leftovers(&self) -> Option<&raw::RawIntoIter<T>> {
+        self.leftovers.as_ref()
     }
 }
 
@@ -470,32 +441,8 @@ impl<T> IntoIterator for RawTable<T> {
     fn into_iter(self) -> RawIntoIter<T> {
         RawIntoIter {
             table: self.table.into_iter(),
-            leftovers: self.leftovers.map(|lo| {
-                // TODO: make this re-use knowledge of progress from lo.items
-                lo.table.into_iter()
-            }),
+            leftovers: self.leftovers,
         }
-    }
-}
-
-struct OldTable<T> {
-    table: raw::RawTable<T>,
-
-    // We cache an iterator over the old table's buckets so we don't need to do a linear search
-    // across buckets we know are empty each time we want to move more items.
-    items: raw::RawIter<T>,
-}
-
-impl<T: Clone> Clone for OldTable<T> {
-    fn clone(&self) -> OldTable<T> {
-        let table = self.table.clone();
-        let items = unsafe { table.iter() };
-        OldTable { table, items }
-    }
-
-    fn clone_from(&mut self, source: &Self) {
-        self.table.clone_from(&source.table);
-        self.items = unsafe { self.table.iter() };
     }
 }
 

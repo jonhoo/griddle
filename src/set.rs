@@ -115,6 +115,7 @@ pub struct HashSet<T, S = DefaultHashBuilder> {
     pub(crate) map: HashMap<T, (), S>,
 }
 
+/*
 impl<T: Clone, S: Clone> Clone for HashSet<T, S> {
     fn clone(&self) -> Self {
         HashSet {
@@ -126,6 +127,7 @@ impl<T: Clone, S: Clone> Clone for HashSet<T, S> {
         self.map.clone_from(&source.map);
     }
 }
+*/
 
 #[cfg(feature = "ahash")]
 impl<T: Hash + Eq> HashSet<T, DefaultHashBuilder> {
