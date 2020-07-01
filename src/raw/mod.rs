@@ -95,7 +95,11 @@ impl<T> RawTable<T> {
             lo.table.erase_no_drop(item);
 
             if lo.table.len() == 0 {
-                let _ = self.leftovers.take();
+                // NOTE: in theory we could drop the leftovers here,
+                // but the contract of erase_no_drop prevents us from doing so.
+                // Specifically, hashbrown's version guarantees that the bucket remain accessible
+                // after erase_no_drop is called, so we need to abide by the same. The leftovers
+                // will be cleaned up on the next operation instead.
             } else {
                 // By changing the state of the table, we have invalidated the table iterator
                 // we keep for what elements are left to move. So, we re-compute it.
@@ -107,6 +111,19 @@ impl<T> RawTable<T> {
             }
         } else {
             unreachable!("invalid bucket state");
+        }
+    }
+
+    #[inline]
+    pub fn post_erase(&mut self, item: &Bucket<T>) {
+        if item.will_move() {
+            if self
+                .leftovers
+                .as_ref()
+                .map_or(false, |lo| lo.table.len() == 0)
+            {
+                let _ = self.leftovers.take();
+            }
         }
     }
 
@@ -230,6 +247,16 @@ impl<T> RawTable<T> {
     /// This does not check if the given element already exists in the table.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn insert(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
+        // Tidy up from earlier calls to erase_no_drop.
+        //
+        // We do this before the check below, because the leftovers are exhausted,
+        // the next insert could cause a resize.
+        if let Some(ref lo) = self.leftovers {
+            if lo.table.len() == 0 {
+                let _ = self.leftovers.take();
+            }
+        }
+
         let bucket = if self.leftovers.is_some() {
             let bucket = if cfg!(debug_assertions) {
                 let buckets = self.table.buckets();
@@ -415,31 +442,31 @@ impl<T> RawTable<T> {
     #[inline(never)]
     pub(crate) fn carry(&mut self, hasher: impl Fn(&T) -> u64) {
         if let Some(ref mut lo) = self.leftovers {
-            for _ in 0..R {
-                // It is safe to continue to access this iterator because:
-                //  - we have not de-allocated the table it points into
-                //  - we have not grown or shrunk the table it points into
-                //
-                // NOTE: Calling next here could be expensive, as the iter needs to search for the
-                // next non-empty bucket. as the map grows in size, that search time will increase
-                // linearly.
-                if let Some(e) = lo.items.next() {
-                    // We need to remove the item in this bucket from the old map
-                    // to the resized map, without shrinking the old map.
-                    let value = unsafe {
-                        let v = e.read();
-                        lo.table.erase_no_drop(&e);
-                        v
-                    };
-                    let hash = hasher(&value);
-                    self.table.insert(hash, value, &hasher);
-                } else {
-                    // The resize is finally fully complete.
-                    let _ = self.leftovers.take();
-                    return;
+            if lo.table.len() != 0 {
+                for _ in 0..R {
+                    // It is safe to continue to access this iterator because:
+                    //  - we have not de-allocated the table it points into
+                    //  - we have not grown or shrunk the table it points into
+                    //
+                    // NOTE: Calling next here could be expensive, as the iter needs to search for the
+                    // next non-empty bucket. as the map grows in size, that search time will increase
+                    // linearly.
+                    if let Some(e) = lo.items.next() {
+                        // We need to remove the item in this bucket from the old map
+                        // to the resized map, without shrinking the old map.
+                        let value = unsafe {
+                            lo.table.erase_no_drop(&e);
+                            e.read()
+                        };
+                        let hash = hasher(&value);
+                        self.table.insert(hash, value, &hasher);
+                    } else {
+                        // The resize is finally fully complete.
+                        let _ = self.leftovers.take();
+                        return;
+                    }
                 }
             }
-
             if lo.table.len() == 0 {
                 // The resize is finally fully complete.
                 let _ = self.leftovers.take();
