@@ -307,8 +307,7 @@ impl<T: Clone> RawTable<T> {
         self.table.clone_from_with_hasher(&source.table, &hasher);
         if let Some(ref lo_) = source.leftovers {
             if let Some(ref mut lo) = self.leftovers {
-                lo.table.clone_from_with_hasher(&lo_.table, hasher);
-                lo.items = unsafe { lo.table.iter() };
+                lo.clone_from(&lo_);
             } else {
                 self.leftovers = Some(lo_.clone());
             }
