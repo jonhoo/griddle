@@ -377,11 +377,13 @@ impl<T> RawTable<T> {
             raw::RawTable::with_capacity(need + inserts + add)
         };
         let old_table = mem::replace(&mut self.table, new_table);
-        let old_table_items = unsafe { old_table.iter() };
-        self.leftovers = Some(OldTable {
-            table: old_table,
-            items: old_table_items,
-        });
+        if old_table.len() != 0 {
+            let old_table_items = unsafe { old_table.iter() };
+            self.leftovers = Some(OldTable {
+                table: old_table,
+                items: old_table_items,
+            });
+        }
         Ok(())
     }
 
