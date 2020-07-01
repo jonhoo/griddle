@@ -1,6 +1,11 @@
 use griddle::hash_map::Entry;
 use griddle::HashMap;
 
+use fnv::FnvHasher;
+use std::hash::BuildHasherDefault;
+type FnvBuilder = BuildHasherDefault<FnvHasher>;
+type FnvHashMap<K, V> = HashMap<K, V, FnvBuilder>;
+
 /// All quickcheck tests here are run this many times to account for random hashing
 const N: usize = 10;
 
@@ -89,6 +94,67 @@ fn clone_with_leftovers() {
         }
         for (k, v) in map2.iter() {
             assert_eq!(map1.get(k), Some(v));
+        }
+    }
+}
+
+#[test]
+fn accidental_key_eq_in_uninit_mem() {
+    for _ in 0..N {
+        // Add(54, -56), AddEntry(9, -90), AddEntry(-17, 40), AddEntry(-76, 4), AddEntry(-10, -24), Add(94, 71), AddEntry(-74, 3), Add(-9, 89), Add(-16, 92), Add(-89, 87), AddEntry(-8, -14), ReplaceWithClone, AddEntry(59, 83), AddEntry(-90, 28), RemoveEntry(-40), Add(73, -94), Add(98, -99), AddEntry(71, -62), Add(43, -21), AddEntry(85, -8), Add(26, 43), AddEntry(48, -9), Add(-77, 22), AddEntry(-78, -56), AddEntry(-45, -69), Add(57, -95), RemoveEntry(-19), Add(-23, 73), Add(-37, 88), Add(12, -24), AddEntry(93, 63), AddEntry(-14, -66), ReplaceWithClone
+        // pruned slightly
+        macro_rules! ops {
+            ($map:ident) => {{
+                $map.insert(54, 54);
+                $map.insert(9, 9);
+                $map.insert(-17, -17);
+                $map.insert(-76, -76);
+                $map.insert(-10, -10);
+                $map.insert(94, 94);
+                $map.insert(-74, -74);
+                $map.insert(-9, -9);
+                $map.insert(-16, -16);
+                $map.insert(-89, -89);
+                $map.insert(-8, -8);
+                // $map = $map.clone();
+                $map.insert(59, 59);
+                $map.insert(-90, -90);
+                // $map.remove(&-40);
+                $map.insert(73, 73);
+                $map.insert(98, 98);
+                $map.insert(71, 71);
+                $map.insert(43, 43);
+                $map.insert(85, 85);
+                $map.insert(26, 26);
+                $map.insert(48, 48);
+                $map.insert(-77, -77);
+                $map.insert(-78, -78);
+                $map.insert(-45, -45);
+                $map.insert(57, 57);
+                // $map.remove(&-19);
+                $map.insert(-23, -23);
+                $map.insert(-37, -37);
+                $map.insert(12, 12);
+                $map.insert(93, 93);
+                $map.insert(-14, -14);
+                $map = $map.clone();
+            }};
+        }
+        let mut map: FnvHashMap<i8, i8> = FnvHashMap::default();
+        let mut reference = std::collections::HashMap::new();
+        ops!(map);
+        ops!(reference);
+
+        assert_eq!(map.len(), reference.len());
+        // check self-lookup first
+        for (k, v) in map.iter() {
+            assert_eq!(map.get(k), Some(v), "k = {}", k);
+        }
+        for (k, v) in map.iter() {
+            assert_eq!(reference.get(k), Some(v), "k = {}", k);
+        }
+        for (k, v) in reference.iter() {
+            assert_eq!(map.get(k), Some(v), "k = {}", k);
         }
     }
 }
