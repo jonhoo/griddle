@@ -720,6 +720,32 @@ where
         self.map.insert(value, ()).is_none()
     }
 
+    /// Adds a value to the set, replacing the existing value, if any, that is equal to the given
+    /// one. Returns the replaced value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashSet;
+    ///
+    /// let mut set = HashSet::new();
+    /// set.insert(Vec::<i32>::new());
+    ///
+    /// assert_eq!(set.get(&[][..]).unwrap().capacity(), 0);
+    /// set.replace(Vec::with_capacity(10));
+    /// assert_eq!(set.get(&[][..]).unwrap().capacity(), 10);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn replace(&mut self, value: T) -> Option<T> {
+        match self.map.entry(value) {
+            map::Entry::Occupied(occupied) => Some(occupied.replace_key()),
+            map::Entry::Vacant(vacant) => {
+                vacant.insert(());
+                None
+            }
+        }
+    }
+
     /// Removes a value from the set. Returns whether the value was
     /// present in the set.
     ///
@@ -1679,6 +1705,38 @@ mod test_set {
 
         assert!(set_str == "{1, 2}" || set_str == "{2, 1}");
         assert_eq!(format!("{:?}", empty), "{}");
+    }
+
+    #[test]
+    fn test_replace() {
+        use core::hash;
+
+        #[derive(Debug)]
+        struct Foo(&'static str, i32);
+
+        impl PartialEq for Foo {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0
+            }
+        }
+
+        impl Eq for Foo {}
+
+        impl hash::Hash for Foo {
+            fn hash<H: hash::Hasher>(&self, h: &mut H) {
+                self.0.hash(h);
+            }
+        }
+
+        let mut s = HashSet::new();
+        assert_eq!(s.replace(Foo("a", 1)), None);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.replace(Foo("a", 2)), Some(Foo("a", 1)));
+        assert_eq!(s.len(), 1);
+
+        let mut it = s.iter();
+        assert_eq!(it.next(), Some(&Foo("a", 2)));
+        assert_eq!(it.next(), None);
     }
 
     #[test]
