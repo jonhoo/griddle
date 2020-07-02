@@ -1853,16 +1853,6 @@ impl<'a, K, V, S> OccupiedEntry<'a, K, V, S> {
         self.remove_entry().1
     }
 
-    // NOTE:
-    // replace_entry and replace_key are _not_ okay, because it may move a bucket in the old
-    // table to _before_ where the "move keys iterator" is currently pointed. in which case we'd
-    // fail to move them.
-    //
-    // it should be possible to work around this by checking if that's the case, and then
-    // restarting the iterator, though that would come at a performance penalty...
-    //
-    // when implemented, remove the #[allow(dead_code)] on OccupiedEntry::key
-
     /// Replaces the entry, returning the old key and value. The new key in the hash map will be
     /// the key used to create this entry.
     ///
