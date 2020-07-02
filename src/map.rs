@@ -1236,7 +1236,6 @@ impl<K: Debug, V: Debug, S> Debug for Entry<'_, K, V, S> {
 ///
 /// [`Entry`]: enum.Entry.html
 pub struct OccupiedEntry<'a, K, V, S> {
-    #[allow(dead_code)] // remove when replace_ methods are implemented
     key: Option<K>,
     elem: Bucket<(K, V)>,
     table: &'a mut HashMap<K, V, S>,
@@ -1872,11 +1871,12 @@ impl<'a, K, V, S> OccupiedEntry<'a, K, V, S> {
     ///
     /// let my_key = Rc::new("Stringthing".to_string());
     ///
-    /// if let Entry::Occupied(entry) = map.entry(my_key) {
+    /// if let Entry::Occupied(entry) = map.entry(my_key.clone()) {
     ///     // Also replace the key with a handle to our other key.
     ///     let (old_key, old_value): (Rc<String>, u32) = entry.replace_entry(16);
     /// }
     ///
+    /// assert_eq!(map[&my_key], 16);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn replace_entry(self, value: V) -> (K, V) {
