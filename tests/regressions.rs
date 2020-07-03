@@ -21,6 +21,7 @@ fn reserve_shrink_add() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn carry_moves_exactly() {
     for _ in 0..N {
         // [AddEntry(-14, 67), Add(6, -14), AddEntry(29, 67), AddEntry(10, 82), Add(-33, -44), Add(37, 88), AddEntry(72, 73), Add(-90, 74), Reserve(45114), AddEntry(-75, -31), Remove(29), RemoveEntry(72), ShrinkToFit, AddEntry(42, -34)]
