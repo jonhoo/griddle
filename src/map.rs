@@ -189,19 +189,27 @@ pub struct HashMap<K, V, S = DefaultHashBuilder> {
     pub(crate) table: RawTable<(K, V)>,
 }
 
-impl<K: Clone, V: Clone, S: Clone> Clone for HashMap<K, V, S> {
+impl<K: Clone + Hash, V: Clone, S: Clone + BuildHasher> Clone for HashMap<K, V, S> {
     fn clone(&self) -> Self {
+        let hash_builder = self.hash_builder.clone();
+        let table = self
+            .table
+            .clone_with_hasher(|x| make_hash(&hash_builder, &x.0));
         HashMap {
-            hash_builder: self.hash_builder.clone(),
-            table: self.table.clone(),
+            hash_builder,
+            table,
         }
     }
 
     fn clone_from(&mut self, source: &Self) {
-        self.table.clone_from(&source.table);
+        // NOTE: Since we may re-hash leftovers on clone, we need the new hash builder straight
+        // away, unlike hashbrown which can get away with just cloning after. We don't want to
+        // change self.hash_builder yet though, in case the cloning panics.
+        let hash_builder = source.hash_builder.clone();
 
-        // Update hash_builder only if we successfully cloned all elements.
-        self.hash_builder.clone_from(&source.hash_builder);
+        self.table
+            .clone_from_with_hasher(&source.table, |x| make_hash(&hash_builder, &x.0));
+        self.hash_builder = hash_builder;
     }
 }
 

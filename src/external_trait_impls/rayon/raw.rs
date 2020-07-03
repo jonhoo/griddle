@@ -53,7 +53,7 @@ impl<T> RawTable<T> {
     pub unsafe fn par_iter(&self) -> RawParIter<T> {
         RawParIter {
             iter: self.main().par_iter(),
-            leftovers: self.leftovers().map(|t| t.par_iter()),
+            leftovers: self.leftovers().map(|t| t.iter().into()),
         }
     }
 }

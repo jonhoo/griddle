@@ -58,4 +58,4 @@ name = "vroom"
 harness = false
 
 [patch.crates-io]
-hashbrown = { git = "https://github.com/rust-lang/hashbrown.git" }
+hashbrown = { git = "https://github.com/jonhoo/hashbrown.git", branch = "reuse-raw-iter" }

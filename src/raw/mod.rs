@@ -47,7 +47,6 @@ impl<T> core::ops::Deref for Bucket<T> {
 /// resizing. When you interact with this API, keep in mind that there may be two backing tables,
 /// and a lookup may return a reference to _either_. Eventually, entries in the old table will be
 /// reclaimed, which invalidates any references to them.
-#[derive(Clone)]
 pub struct RawTable<T> {
     table: raw::RawTable<T>,
     leftovers: Option<OldTable<T>>,
@@ -92,19 +91,8 @@ impl<T> RawTable<T> {
         if item.in_main {
             self.table.erase(item.bucket);
         } else if let Some(ref mut lo) = self.leftovers {
+            lo.items.reflect_remove(&item.bucket);
             lo.table.erase(item.bucket);
-
-            if lo.table.len() == 0 {
-                let _ = self.leftovers.take();
-            } else {
-                // By changing the state of the table, we have invalidated the table iterator
-                // we keep for what elements are left to move. So, we re-compute it.
-                //
-                // TODO: We should be able to "fix up" the iterator rather than replace it,
-                // which would save us from iterating over the prefix of empty buckets we've
-                // left in our wake from the moves so far.
-                lo.items = lo.table.iter();
-            }
         } else {
             unreachable!("invalid bucket state");
         }
@@ -116,32 +104,16 @@ impl<T> RawTable<T> {
         if item.in_main {
             self.table.remove(item.bucket)
         } else if let Some(ref mut lo) = self.leftovers {
+            lo.items.reflect_remove(&item.bucket);
             let v = lo.table.remove(item.bucket);
 
             if lo.table.len() == 0 {
                 let _ = self.leftovers.take();
-            } else {
-                // By changing the state of the table, we have invalidated the table iterator
-                // we keep for what elements are left to move. So, we re-compute it.
-                //
-                // TODO: We should be able to "fix up" the iterator rather than replace it,
-                // which would save us from iterating over the prefix of empty buckets we've
-                // left in our wake from the moves so far.
-                lo.items = lo.table.iter();
             }
 
             v
         } else {
             unreachable!("invalid bucket state");
-        }
-    }
-
-    /// Marks all table buckets as empty without dropping their contents.
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn clear_no_drop(&mut self) {
-        self.table.clear_no_drop();
-        if let Some(mut lo) = self.leftovers.take() {
-            lo.table.clear_no_drop();
         }
     }
 
@@ -343,18 +315,37 @@ impl<T> RawTable<T> {
     }
 }
 
+fn and_carry_with_hasher<T: Clone>(
+    table: &mut raw::RawTable<T>,
+    leftovers: &Option<OldTable<T>>,
+    hasher: impl Fn(&T) -> u64,
+) {
+    if let Some(lo) = leftovers {
+        for e in lo.items.clone() {
+            let v = unsafe { e.as_ref() };
+            let hash = hasher(v);
+            table.insert(hash, v.clone(), &hasher);
+        }
+    }
+}
+
 impl<T: Clone> RawTable<T> {
     /// Variant of `clone_from` to use when a hasher is available.
-    #[cfg(feature = "raw")]
     pub fn clone_from_with_hasher(&mut self, source: &Self, hasher: impl Fn(&T) -> u64) {
+        let _ = self.leftovers.take();
         self.table.clone_from_with_hasher(&source.table, &hasher);
-        if let Some(ref lo_) = source.leftovers {
-            if let Some(ref mut lo) = self.leftovers {
-                lo.table.clone_from_with_hasher(&lo_.table, hasher);
-                lo.items = unsafe { lo.table.iter() };
-            } else {
-                self.leftovers = Some(lo_.clone());
-            }
+        // Since we're doing the work of cloning anyway, we might as well carry the leftovers.
+        and_carry_with_hasher(&mut self.table, &source.leftovers, hasher);
+    }
+
+    /// Variant of `clone` to use when a hasher is available.
+    pub fn clone_with_hasher(&self, hasher: impl Fn(&T) -> u64) -> Self {
+        let mut table = self.table.clone();
+        // Since we're doing the work of cloning anyway, we might as well carry the leftovers.
+        and_carry_with_hasher(&mut table, &self.leftovers, hasher);
+        RawTable {
+            table,
+            leftovers: None,
         }
     }
 }
@@ -393,12 +384,7 @@ impl<T> RawTable<T> {
         // Normally, that'll be handled by `inserts`, but not always!
         let add = usize::max(extra, inserts);
         let new_table = if fallible {
-            // TODO: https://github.com/rust-lang/hashbrown/issues/169
-            let mut new_table = raw::RawTable::new();
-            new_table.try_reserve(need + inserts + add, |_| {
-                unreachable!("hasher should not be needed for empty resize")
-            })?;
-            new_table
+            raw::RawTable::try_with_capacity(need + inserts + add)?
         } else {
             raw::RawTable::with_capacity(need + inserts + add)
         };
@@ -491,10 +477,9 @@ impl<T> IntoIterator for RawTable<T> {
     fn into_iter(self) -> RawIntoIter<T> {
         RawIntoIter {
             table: self.table.into_iter(),
-            leftovers: self.leftovers.map(|lo| {
-                // TODO: make this re-use knowledge of progress from lo.items
-                lo.table.into_iter()
-            }),
+            leftovers: self
+                .leftovers
+                .map(|lo| unsafe { lo.table.into_iter_from(lo.items) }),
         }
     }
 }
@@ -505,19 +490,6 @@ struct OldTable<T> {
     // We cache an iterator over the old table's buckets so we don't need to do a linear search
     // across buckets we know are empty each time we want to move more items.
     items: raw::RawIter<T>,
-}
-
-impl<T: Clone> Clone for OldTable<T> {
-    fn clone(&self) -> OldTable<T> {
-        let table = self.table.clone();
-        let items = unsafe { table.iter() };
-        OldTable { table, items }
-    }
-
-    fn clone_from(&mut self, source: &Self) {
-        self.table.clone_from(&source.table);
-        self.items = unsafe { self.table.iter() };
-    }
 }
 
 /// Iterator which returns a raw pointer to every full bucket in the table.
