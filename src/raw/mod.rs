@@ -638,8 +638,14 @@ impl<T> Iterator for RawIntoIter<T> {
 
     #[cfg_attr(feature = "inline-more", inline)]
     fn next(&mut self) -> Option<T> {
-        let leftovers = &mut self.leftovers;
-        self.table.next().or_else(|| leftovers.as_mut()?.next())
+        if let Some(ref mut lo) = self.leftovers {
+            if let Some(e) = lo.next() {
+                return Some(e);
+            }
+            // Done with leftovers.
+            let _ = self.leftovers.take();
+        }
+        self.table.next()
     }
 
     #[cfg_attr(feature = "inline-more", inline)]
@@ -677,8 +683,14 @@ impl<T> Iterator for RawDrain<'_, T> {
 
     #[cfg_attr(feature = "inline-more", inline)]
     fn next(&mut self) -> Option<T> {
-        let leftovers = &mut self.leftovers;
-        self.table.next().or_else(|| leftovers.as_mut()?.next())
+        if let Some(ref mut lo) = self.leftovers {
+            if let Some(e) = lo.next() {
+                return Some(e);
+            }
+            // Done with leftovers.
+            let _ = self.leftovers.take();
+        }
+        self.table.next()
     }
 
     #[cfg_attr(feature = "inline-more", inline)]
