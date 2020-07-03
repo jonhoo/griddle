@@ -517,6 +517,43 @@ pub struct RawIter<T> {
     leftovers: Option<raw::RawIter<T>>,
 }
 
+impl<T> RawIter<T> {
+    /// Refresh the iterator so that it reflects a removal from the given bucket.
+    ///
+    /// For the iterator to remain valid, this method must be called once
+    /// for each removed bucket before `next` is called again.
+    ///
+    /// This method should be called _before_ the removal is made. It is not necessary to call this
+    /// method if you are removing an item that this iterator yielded in the past.
+    #[cfg(feature = "raw")]
+    pub fn reflect_remove(&mut self, b: &Bucket<T>) {
+        if b.in_main {
+            self.table.reflect_remove(b)
+        } else if let Some(ref mut lo) = self.leftovers {
+            // NOTE: The actuall call to erase/remove will take care of calling reflect_remove in
+            // the "main" leftover's iterator.
+            lo.reflect_remove(b)
+        } else {
+            unreachable!("invalid bucket state");
+        }
+    }
+
+    /// Refresh the iterator so that it reflects an insertion into the given bucket.
+    ///
+    /// For the iterator to remain valid, this method must be called once
+    /// for each insert before `next` is called again.
+    ///
+    /// This method does not guarantee that an insertion of a bucket witha greater
+    /// index than the last one yielded will be reflected in the iterator.
+    ///
+    /// This method should be called _after_ the given insert is made.
+    #[cfg(feature = "raw")]
+    pub fn reflect_insert(&mut self, b: &Bucket<T>) {
+        assert!(b.in_main, "no insertion can happen into leftovers");
+        self.table.reflect_insert(b)
+    }
+}
+
 impl<T> Clone for RawIter<T> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn clone(&self) -> Self {
