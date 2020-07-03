@@ -66,9 +66,18 @@ impl<T> RawTable<T> {
         }
     }
 
+    /// Attempts to allocate a new hash table with at least enough capacity
+    /// for inserting the given number of elements without reallocating.
+    #[cfg(feature = "raw")]
+    pub fn try_with_capacity(capacity: usize) -> Result<Self, TryReserveError> {
+        Ok(Self {
+            table: raw::RawTable::try_with_capacity(capacity)?,
+            leftovers: None,
+        })
+    }
+
     /// Allocates a new hash table with at least enough capacity for inserting
     /// the given number of elements without reallocating.
-    #[cfg_attr(feature = "inline-more", inline)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             table: raw::RawTable::with_capacity(capacity),
@@ -85,7 +94,7 @@ impl<T> RawTable<T> {
         }
     }
 
-    /// Erases and drops an element from the table.
+    /// Erases an element from the table, dropping it in place.
     #[cfg_attr(feature = "inline-more", inline)]
     pub unsafe fn erase(&mut self, item: Bucket<T>) {
         if item.in_main {
@@ -98,7 +107,7 @@ impl<T> RawTable<T> {
         }
     }
 
-    /// Removes and returns an element from the table.
+    /// Removes an element from the table, returning it.
     #[cfg_attr(feature = "inline-more", inline)]
     pub unsafe fn remove(&mut self, item: Bucket<T>) -> T {
         if item.in_main {
@@ -313,6 +322,18 @@ impl<T> RawTable<T> {
             leftovers: self.leftovers.as_ref().map(|lo| lo.items.clone()),
         }
     }
+
+    /// Returns an iterator which consumes all elements from the table.
+    ///
+    /// Iteration starts at the provided iterator's current location.
+    ///
+    /// This method panics if the given iterator does not cover all items remaining in the table.
+    pub unsafe fn into_iter_from(self, iter: RawIter<T>) -> RawIntoIter<T> {
+        RawIntoIter {
+            table: self.table.into_iter_from(iter.table),
+            leftovers: self.leftovers.map(|lo| lo.table.into_iter_from(lo.items)),
+        }
+    }
 }
 
 fn and_carry_with_hasher<T: Clone>(
@@ -475,11 +496,9 @@ impl<T> IntoIterator for RawTable<T> {
 
     #[cfg_attr(feature = "inline-more", inline)]
     fn into_iter(self) -> RawIntoIter<T> {
-        RawIntoIter {
-            table: self.table.into_iter(),
-            leftovers: self
-                .leftovers
-                .map(|lo| unsafe { lo.table.into_iter_from(lo.items) }),
+        unsafe {
+            let iter = self.iter();
+            self.into_iter_from(iter)
         }
     }
 }
