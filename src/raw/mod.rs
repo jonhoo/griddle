@@ -664,6 +664,7 @@ pub struct RawDrain<'a, T> {
 }
 
 impl<T> RawDrain<'_, T> {
+    /// Returns a by-reference iterator over the remaining items of this iterator.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn iter(&self) -> RawIter<T> {
         RawIter {
