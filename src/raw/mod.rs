@@ -323,6 +323,21 @@ impl<T> RawTable<T> {
         }
     }
 
+    /// Returns an iterator which removes all elements from the table without
+    /// freeing the memory. It is up to the caller to ensure that the `RawTable`
+    /// outlives the `RawDrain`. Because we cannot make the `next` method unsafe
+    /// on the `RawDrain`, we have to make the `drain` method unsafe.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub unsafe fn drain(&mut self) -> RawDrain<'_, T> {
+        RawDrain {
+            table: self.table.drain(),
+            leftovers: self
+                .leftovers
+                .take()
+                .map(|lo| lo.table.into_iter_from(lo.items)),
+        }
+    }
+
     /// Returns an iterator which consumes all elements from the table.
     ///
     /// Iteration starts at the provided iterator's current location.
@@ -635,3 +650,50 @@ impl<T> Iterator for RawIntoIter<T> {
 
 impl<T> ExactSizeIterator for RawIntoIter<T> {}
 impl<T> FusedIterator for RawIntoIter<T> {}
+
+/// Iterator which consumes elements without freeing the table storage.
+pub struct RawDrain<'a, T> {
+    table: raw::RawDrain<'a, T>,
+    leftovers: Option<raw::RawIntoIter<T>>,
+}
+
+impl<T> RawDrain<'_, T> {
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn iter(&self) -> RawIter<T> {
+        RawIter {
+            table: self.table.iter(),
+            leftovers: self.leftovers.as_ref().map(|lo| lo.iter()),
+        }
+    }
+}
+
+impl<T> Drop for RawDrain<'_, T> {
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn drop(&mut self) {}
+}
+
+impl<T> Iterator for RawDrain<'_, T> {
+    type Item = T;
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn next(&mut self) -> Option<T> {
+        let leftovers = &mut self.leftovers;
+        self.table.next().or_else(|| leftovers.as_mut()?.next())
+    }
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let (mut lo, mut hi) = self.table.size_hint();
+        if let Some(ref left) = self.leftovers {
+            let (lo2, hi2) = left.size_hint();
+            lo += lo2;
+            if let (Some(ref mut hi), Some(hi2)) = (&mut hi, hi2) {
+                *hi += hi2;
+            }
+        }
+        (lo, hi)
+    }
+}
+
+impl<T> ExactSizeIterator for RawDrain<'_, T> {}
+impl<T> FusedIterator for RawDrain<'_, T> {}

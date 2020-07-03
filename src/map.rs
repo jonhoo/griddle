@@ -1,4 +1,4 @@
-use crate::raw::{Bucket, RawIntoIter, RawIter, RawTable};
+use crate::raw::{Bucket, RawDrain, RawIntoIter, RawIter, RawTable};
 use crate::TryReserveError;
 use core::borrow::Borrow;
 use core::fmt::{self, Debug};
@@ -537,6 +537,35 @@ impl<K, V, S> HashMap<K, V, S> {
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Clears the map, returning all key-value pairs as an iterator. Keeps the
+    /// allocated memory for reuse.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut a = HashMap::new();
+    /// a.insert(1, "a");
+    /// a.insert(2, "b");
+    ///
+    /// for (k, v) in a.drain().take(1) {
+    ///     assert!(k == 1 || k == 2);
+    ///     assert!(v == "a" || v == "b");
+    /// }
+    ///
+    /// assert!(a.is_empty());
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn drain(&mut self) -> Drain<'_, K, V> {
+        // Here we tie the lifetime of self to the iter.
+        unsafe {
+            Drain {
+                inner: self.table.drain(),
+            }
+        }
     }
 
     /// Retains only the elements specified by the predicate.
@@ -1204,6 +1233,28 @@ impl<K, V: Debug> fmt::Debug for Values<'_, K, V> {
     }
 }
 
+/// A draining iterator over the entries of a `HashMap`.
+///
+/// This `struct` is created by the [`drain`] method on [`HashMap`]. See its
+/// documentation for more.
+///
+/// [`drain`]: struct.HashMap.html#method.drain
+/// [`HashMap`]: struct.HashMap.html
+pub struct Drain<'a, K, V> {
+    inner: RawDrain<'a, (K, V)>,
+}
+
+impl<K, V> Drain<'_, K, V> {
+    /// Returns a iterator of references over the remaining items.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub(super) fn iter(&self) -> Iter<'_, K, V> {
+        Iter {
+            inner: self.inner.iter(),
+            marker: PhantomData,
+        }
+    }
+}
+
 /// A mutable iterator over the values of a `HashMap`.
 ///
 /// This `struct` is created by the [`values_mut`] method on [`HashMap`]. See its
@@ -1488,6 +1539,36 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.inner.iter()).finish()
+    }
+}
+
+impl<'a, K, V> Iterator for Drain<'a, K, V> {
+    type Item = (K, V);
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn next(&mut self) -> Option<(K, V)> {
+        self.inner.next()
+    }
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl<K, V> ExactSizeIterator for Drain<'_, K, V> {
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+impl<K, V> FusedIterator for Drain<'_, K, V> {}
+
+impl<K, V> fmt::Debug for Drain<'_, K, V>
+where
+    K: fmt::Debug,
+    V: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
     }
 }
 
@@ -2030,6 +2111,11 @@ fn assert_covariance() {
     fn values_val<'a, 'new>(v: Values<'a, u8, &'static str>) -> Values<'a, u8, &'new str> {
         v
     }
+    fn drain<'new>(
+        d: Drain<'static, &'static str, &'static str>,
+    ) -> Drain<'new, &'new str, &'new str> {
+        d
+    }
 }
 
 #[cfg(test)]
@@ -2367,6 +2453,7 @@ mod test_map {
     #[test]
     fn test_empty_iter() {
         let mut m: HashMap<i32, bool> = HashMap::new();
+        assert_eq!(m.drain().next(), None);
         assert_eq!(m.keys().next(), None);
         assert_eq!(m.values().next(), None);
         assert_eq!(m.values_mut().next(), None);
