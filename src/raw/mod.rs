@@ -237,32 +237,34 @@ impl<T> RawTable<T> {
     /// This does not check if the given element already exists in the table.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn insert(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
-        let bucket = if self.leftovers.is_some() {
-            let bucket = if cfg!(debug_assertions) {
-                let buckets = self.table.buckets();
-                let b = self.table.insert(hash, value, &hasher);
-
-                // make sure table didn't resize
-                assert_eq!(
-                    buckets,
-                    self.table.buckets(),
-                    "resize while elements are still left over"
-                );
-                b
-            } else {
-                self.table.insert(hash, value, &hasher)
-            };
-            // Also carry some items over.
-            self.carry(hasher);
-            bucket
-        } else if self.table.capacity() == self.table.len() {
+        if self.table.capacity() == self.table.len() {
+            assert!(self.leftovers.is_none());
             // Even though this _may_ succeed without growing due to tombstones, handling
             // that case is convoluted, so we just assume this would grow the map.
             self.grow(1);
             return self.insert(hash, value, hasher);
+        }
+
+        let bucket = if cfg!(debug_assertions) {
+            let buckets = self.table.buckets();
+            let b = self.table.insert(hash, value, &hasher);
+
+            // make sure table didn't resize
+            assert_eq!(
+                buckets,
+                self.table.buckets(),
+                "resize while elements are still left over"
+            );
+            b
         } else {
-            self.table.insert(hash, value, hasher)
+            self.table.insert(hash, value, &hasher)
         };
+
+        if self.leftovers.is_some() {
+            // Also carry some items over.
+            self.carry(hasher);
+        }
+
         Bucket {
             bucket,
             in_main: true,
