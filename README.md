@@ -23,7 +23,7 @@ pauses at all.
 Where resizing becomes a problem is in applications that use maps to
 keep ever-growing state where tail latency is important. At large scale,
 it is simply not okay for one map insert to take 30 milliseconds when
-most take single-digit **micro**seconds. Worse yet, these resize pauses
+most take below a **micro**second. Worse yet, these resize pauses
 can compound to create [significant spikes] in tail latency.
 
 This crate implements a technique referred to as "incremental resizing",

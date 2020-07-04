@@ -13,7 +13,7 @@ keywords = ["hash", "no_std", "hashmap", "amortized"]
 categories = ["data-structures", "no-std"]
 
 [badges]
-azure-devops = { project = "jonhoo/jonhoo", pipeline = "arrav", build = "26" }
+azure-devops = { project = "jonhoo/jonhoo", pipeline = "griddle", build = "26" }
 codecov = { repository = "jonhoo/griddle", branch = "master", service = "github" }
 maintenance = { status = "experimental" }
 
