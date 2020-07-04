@@ -8,10 +8,9 @@ coverage:
       default:
         threshold: 1%
 
-# Tests and Java files aren't important for coverage
+# Tests aren't important for coverage
 ignore:
   - "tests"
-  - "jsr166"
 
 # Make less noisy comments
 comment:
