@@ -18,7 +18,7 @@ codecov = { repository = "jonhoo/griddle", branch = "master", service = "github"
 maintenance = { status = "experimental" }
 
 [dependencies]
-hashbrown = { version = "0.8", default-features = false, features = ["raw"] }
+hashbrown = { version = "0.8.1", default-features = false, features = ["raw"] }
 
 # For external trait impls
 rayon_ = { version = "1.0", optional = true, package = "rayon" }
@@ -56,6 +56,3 @@ features = ["rayon", "serde", "raw"]
 [[bench]]
 name = "vroom"
 harness = false
-
-[patch.crates-io]
-hashbrown = { git = "https://github.com/rust-lang/hashbrown.git" }
