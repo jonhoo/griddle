@@ -245,20 +245,21 @@ impl<T> RawTable<T> {
             return self.insert(hash, value, hasher);
         }
 
-        let bucket = if cfg!(debug_assertions) {
-            let buckets = self.table.buckets();
-            let b = self.table.insert(hash, value, &hasher);
+        self.insert_no_grow(hash, value, hasher)
+    }
 
-            // make sure table didn't resize
-            assert_eq!(
-                buckets,
-                self.table.buckets(),
-                "resize while elements are still left over"
-            );
-            b
-        } else {
-            self.table.insert(hash, value, &hasher)
-        };
+    /// Inserts a new element into the table, without growing the table.
+    ///
+    /// There must be enough space in the table to insert the new element.
+    ///
+    /// This does not check if the given element already exists in the table.
+    ///
+    /// Note that unlike `hashbrown::RawTable::insert_no_grow`, this _does_ take a `hasher`.
+    /// This is because while the insert won't grow the table, it may need to carry over some
+    /// elements from the pre-resize table to the current table, which requires re-hashing.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert_no_grow(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
+        let bucket = self.table.insert_no_grow(hash, value);
 
         if self.leftovers.is_some() {
             // Also carry some items over.
@@ -477,7 +478,7 @@ impl<T> RawTable<T> {
                     // to the resized map, without shrinking the old map.
                     let value = unsafe { lo.table.remove(e) };
                     let hash = hasher(&value);
-                    self.table.insert(hash, value, &hasher);
+                    self.table.insert_no_grow(hash, value);
                 } else {
                     // The resize is finally fully complete.
                     let _ = self.leftovers.take();
