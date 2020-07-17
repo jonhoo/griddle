@@ -93,6 +93,7 @@ enum Op<K, V> {
     AddEntry(K, V),
     RemoveEntry(K),
     ShrinkToFit,
+    ReplaceWithClone,
     Reserve(u16),
 }
 
@@ -108,6 +109,7 @@ where
             2 => Remove(K::arbitrary(g)),
             3 => RemoveEntry(K::arbitrary(g)),
             4 => ShrinkToFit,
+            5 => ReplaceWithClone,
             _ => Reserve(g.gen::<u16>()),
         }
     }
@@ -117,7 +119,7 @@ fn do_ops<K, V, S>(ops: &[Op<K, V>], a: &mut GriddleMap<K, V, S>, b: &mut HashMa
 where
     K: Hash + Eq + Clone,
     V: Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
 {
     for op in ops {
         match *op {
@@ -144,6 +146,10 @@ where
             ShrinkToFit => {
                 a.shrink_to_fit();
                 b.shrink_to_fit();
+            }
+            ReplaceWithClone => {
+                *a = a.clone();
+                *b = b.clone();
             }
             Reserve(n) => {
                 a.reserve(n as usize);
@@ -217,24 +223,33 @@ quickcheck! {
         true
     }
 
-    fn equality(ops1: Vec<Op<i8, i8>>, removes: Vec<usize>) -> bool {
+    fn equality(ops: Vec<Op<i8, i8>>) -> bool {
         let mut map = GriddleMap::new();
         let mut reference = HashMap::new();
-        do_ops(&ops1, &mut map, &mut reference);
-        let mut ops2 = ops1.clone();
-        for &r in &removes {
-            if !ops2.is_empty() {
-                let i = r % ops2.len();
-                ops2.remove(i);
-            }
+        do_ops(&ops, &mut map, &mut reference);
+
+        assert_eq!(map.len(), reference.len());
+        for (k, v) in map.iter() {
+            assert_eq!(reference.get(k), Some(v), "k = {}", k);
         }
-        let mut map2 = GriddleMapFnv::default();
-        let mut reference2 = HashMap::new();
-        do_ops(&ops2, &mut map2, &mut reference2);
-        let should = reference == reference2;
-        assert_eq!(map.len() == map2.len() && map.iter().all(|(k, v)| {
-            map2.get(k).map_or(false, |v2| v2 == v)
-        }), should);
+        for (k, v) in reference.iter() {
+            assert_eq!(map.get(k), Some(v), "k = {}", k);
+        }
+        true
+    }
+
+    fn equality_fnv(ops: Vec<Op<i8, i8>>) -> bool {
+        let mut map = GriddleMapFnv::default();
+        let mut reference = HashMap::new();
+        do_ops(&ops, &mut map, &mut reference);
+
+        assert_eq!(map.len(), reference.len());
+        for (k, v) in map.iter() {
+            assert_eq!(reference.get(k), Some(v), "k = {}", k);
+        }
+        for (k, v) in reference.iter() {
+            assert_eq!(map.get(k), Some(v), "k = {}", k);
+        }
         true
     }
 }

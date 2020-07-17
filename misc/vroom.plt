@@ -6,7 +6,7 @@ set output 'vroom.png'
 set title "Insertion time"
 set xlabel "Index"
 set ylabel "Latency [ms]"
-set xrange [0:2e6]
+set xrange [0:4194304]
 
 set style line 1 lc rgb '#1b9e77'
 set style line 2 lc rgb '#d95f02'

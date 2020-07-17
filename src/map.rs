@@ -1,4 +1,4 @@
-use crate::raw::{Bucket, RawIntoIter, RawIter, RawTable};
+use crate::raw::{Bucket, RawDrain, RawIntoIter, RawIter, RawTable};
 use crate::TryReserveError;
 use core::borrow::Borrow;
 use core::fmt::{self, Debug};
@@ -189,19 +189,27 @@ pub struct HashMap<K, V, S = DefaultHashBuilder> {
     pub(crate) table: RawTable<(K, V)>,
 }
 
-impl<K: Clone, V: Clone, S: Clone> Clone for HashMap<K, V, S> {
+impl<K: Clone + Hash, V: Clone, S: Clone + BuildHasher> Clone for HashMap<K, V, S> {
     fn clone(&self) -> Self {
+        let hash_builder = self.hash_builder.clone();
+        let table = self
+            .table
+            .clone_with_hasher(|x| make_hash(&hash_builder, &x.0));
         HashMap {
-            hash_builder: self.hash_builder.clone(),
-            table: self.table.clone(),
+            hash_builder,
+            table,
         }
     }
 
     fn clone_from(&mut self, source: &Self) {
-        self.table.clone_from(&source.table);
+        // NOTE: Since we may re-hash leftovers on clone, we need the new hash builder straight
+        // away, unlike hashbrown which can get away with just cloning after. We don't want to
+        // change self.hash_builder yet though, in case the cloning panics.
+        let hash_builder = source.hash_builder.clone();
 
-        // Update hash_builder only if we successfully cloned all elements.
-        self.hash_builder.clone_from(&source.hash_builder);
+        self.table
+            .clone_from_with_hasher(&source.table, |x| make_hash(&hash_builder, &x.0));
+        self.hash_builder = hash_builder;
     }
 }
 
@@ -531,6 +539,35 @@ impl<K, V, S> HashMap<K, V, S> {
         self.len() == 0
     }
 
+    /// Clears the map, returning all key-value pairs as an iterator. Keeps the
+    /// allocated memory for reuse.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut a = HashMap::new();
+    /// a.insert(1, "a");
+    /// a.insert(2, "b");
+    ///
+    /// for (k, v) in a.drain().take(1) {
+    ///     assert!(k == 1 || k == 2);
+    ///     assert!(v == "a" || v == "b");
+    /// }
+    ///
+    /// assert!(a.is_empty());
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn drain(&mut self) -> Drain<'_, K, V> {
+        // Here we tie the lifetime of self to the iter.
+        unsafe {
+            Drain {
+                inner: self.table.drain(),
+            }
+        }
+    }
+
     /// Retains only the elements specified by the predicate.
     ///
     /// In other words, remove all pairs `(k, v)` such that `f(&k,&mut v)` returns `false`.
@@ -553,11 +590,7 @@ impl<K, V, S> HashMap<K, V, S> {
             for item in self.table.iter() {
                 let &mut (ref key, ref mut value) = item.as_mut();
                 if !f(key, value) {
-                    // Erase the element from the table first since drop might panic.
-                    // But read it before the erase in case erase invalidates the memory.
-                    let v = item.read();
-                    self.table.erase_no_drop(&item);
-                    drop(v);
+                    self.table.erase(item);
                 }
             }
         }
@@ -994,10 +1027,7 @@ where
         unsafe {
             let hash = make_hash(&self.hash_builder, &k);
             if let Some(item) = self.table.find(hash, |x| k.eq(x.0.borrow())) {
-                // Read the item before the erase, in case erase reclaims memory.
-                let v = item.read();
-                self.table.erase_no_drop(&item);
-                Some(v)
+                Some(self.table.remove(item))
             } else {
                 None
             }
@@ -1200,6 +1230,28 @@ impl<K, V> Clone for Values<'_, K, V> {
 impl<K, V: Debug> fmt::Debug for Values<'_, K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.clone()).finish()
+    }
+}
+
+/// A draining iterator over the entries of a `HashMap`.
+///
+/// This `struct` is created by the [`drain`] method on [`HashMap`]. See its
+/// documentation for more.
+///
+/// [`drain`]: struct.HashMap.html#method.drain
+/// [`HashMap`]: struct.HashMap.html
+pub struct Drain<'a, K, V> {
+    inner: RawDrain<'a, (K, V)>,
+}
+
+impl<K, V> Drain<'_, K, V> {
+    /// Returns a iterator of references over the remaining items.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub(super) fn iter(&self) -> Iter<'_, K, V> {
+        Iter {
+            inner: self.inner.iter(),
+            marker: PhantomData,
+        }
     }
 }
 
@@ -1489,6 +1541,36 @@ where
     }
 }
 
+impl<'a, K, V> Iterator for Drain<'a, K, V> {
+    type Item = (K, V);
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn next(&mut self) -> Option<(K, V)> {
+        self.inner.next()
+    }
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl<K, V> ExactSizeIterator for Drain<'_, K, V> {
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+impl<K, V> FusedIterator for Drain<'_, K, V> {}
+
+impl<K, V> fmt::Debug for Drain<'_, K, V>
+where
+    K: fmt::Debug,
+    V: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
 impl<'a, K, V, S> Entry<'a, K, V, S> {
     /// Sets the value of the entry, and returns an OccupiedEntry.
     ///
@@ -1719,12 +1801,7 @@ impl<'a, K, V, S> OccupiedEntry<'a, K, V, S> {
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn remove_entry(self) -> (K, V) {
-        unsafe {
-            // Read the item before the erase, in case erase reclaims memory.
-            let v = self.elem.read();
-            self.table.table.erase_no_drop(&self.elem);
-            v
-        }
+        unsafe { self.table.table.remove(self.elem) }
     }
 
     /// Gets a reference to the value in the entry.
@@ -2084,6 +2161,11 @@ fn assert_covariance() {
     fn values_val<'a, 'new>(v: Values<'a, u8, &'static str>) -> Values<'a, u8, &'new str> {
         v
     }
+    fn drain<'new>(
+        d: Drain<'static, &'static str, &'static str>,
+    ) -> Drain<'new, &'new str, &'new str> {
+        d
+    }
 }
 
 #[cfg(test)]
@@ -2421,6 +2503,7 @@ mod test_map {
     #[test]
     fn test_empty_iter() {
         let mut m: HashMap<i32, bool> = HashMap::new();
+        assert_eq!(m.drain().next(), None);
         assert_eq!(m.keys().next(), None);
         assert_eq!(m.values().next(), None);
         assert_eq!(m.values_mut().next(), None);
@@ -3092,6 +3175,76 @@ mod test_map {
             } else {
                 panic!("usize::MAX / 8 should trigger an OOM!");
             }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "raw")]
+    fn test_into_iter_refresh() {
+        use core::hash::{BuildHasher, Hash, Hasher};
+
+        #[cfg(miri)]
+        const N: usize = 32;
+        #[cfg(not(miri))]
+        const N: usize = 128;
+
+        let mut rng = rand::thread_rng();
+        for n in 0..N {
+            let mut m = HashMap::new();
+            for i in 0..n {
+                assert!(m.insert(i, 2 * i).is_none());
+            }
+            let hasher = m.hasher().clone();
+
+            let mut it = unsafe { m.table.iter() };
+            assert_eq!(it.len(), n);
+
+            let mut i = 0;
+            let mut left = n;
+            let mut removed = Vec::new();
+            loop {
+                // occasionally remove some elements
+                if i < n && rng.gen_bool(0.1) {
+                    let mut hsh = hasher.build_hasher();
+                    i.hash(&mut hsh);
+                    let hash = hsh.finish();
+
+                    unsafe {
+                        let e = m.table.find(hash, |q| q.0.eq(&i));
+                        if let Some(e) = e {
+                            it.reflect_remove(&e);
+                            let t = m.table.remove(e);
+                            removed.push(t);
+                            left -= 1;
+                        } else {
+                            assert!(removed.contains(&(i, 2 * i)), "{} not in {:?}", i, removed);
+                            let e = m
+                                .table
+                                .insert(hash, (i, 2 * i), |x| super::make_hash(&hasher, &x.0));
+                            it.reflect_insert(&e);
+                            if let Some(p) = removed.iter().position(|e| e == &(i, 2 * i)) {
+                                removed.swap_remove(p);
+                            }
+                            left += 1;
+                        }
+                    }
+                }
+
+                let e = it.next();
+                if e.is_none() {
+                    break;
+                }
+                assert!(i < n);
+                let t = unsafe { e.unwrap().as_ref() };
+                assert!(!removed.contains(t));
+                let (k, v) = t;
+                assert_eq!(*v, 2 * k);
+                i += 1;
+            }
+            assert!(i <= n);
+
+            // just for safety:
+            assert_eq!(m.table.len(), left);
         }
     }
 }
