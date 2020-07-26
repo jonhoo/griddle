@@ -2168,6 +2168,562 @@ fn assert_covariance() {
     }
 }
 
+impl<K, V, S> HashMap<K, V, S> {
+    /// Creates a raw entry builder for the HashMap.
+    ///
+    /// Raw entries provide the lowest level of control for searching and
+    /// manipulating a map. They must be manually initialized with a hash and
+    /// then manually searched. After this, insertions into a vacant entry
+    /// still require an owned key to be provided.
+    ///
+    /// Raw entries are useful for such exotic situations as:
+    ///
+    /// * Hash memoization
+    /// * Deferring the creation of an owned key until it is known to be required
+    /// * Using a search key that doesn't work with the Borrow trait
+    /// * Using custom comparison logic without newtype wrappers
+    ///
+    /// Because raw entries provide much more low-level control, it's much easier
+    /// to put the HashMap into an inconsistent state which, while memory-safe,
+    /// will cause the map to produce seemingly random results. Higher-level and
+    /// more foolproof APIs like `entry` should be preferred when possible.
+    ///
+    /// In particular, the hash used to initialized the raw entry must still be
+    /// consistent with the hash of the key that is ultimately stored in the entry.
+    /// This is because implementations of HashMap may need to recompute hashes
+    /// when resizing, at which point only the keys are available.
+    ///
+    /// Raw entries give mutable access to the keys. This must not be used
+    /// to modify how the key would compare or hash, as the map will not re-evaluate
+    /// where the key should go, meaning the keys may become "lost" if their
+    /// location does not reflect their state. For instance, if you change a key
+    /// so that the map now contains keys which compare equal, search may start
+    /// acting erratically, with two keys randomly masking each other. Implementations
+    /// are free to assume this doesn't happen (within the limits of memory-safety).
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn raw_entry_mut(&mut self) -> RawEntryBuilderMut<'_, K, V, S> {
+        RawEntryBuilderMut { map: self }
+    }
+
+    /// Creates a raw immutable entry builder for the HashMap.
+    ///
+    /// Raw entries provide the lowest level of control for searching and
+    /// manipulating a map. They must be manually initialized with a hash and
+    /// then manually searched.
+    ///
+    /// This is useful for
+    /// * Hash memoization
+    /// * Using a search key that doesn't work with the Borrow trait
+    /// * Using custom comparison logic without newtype wrappers
+    ///
+    /// Unless you are in such a situation, higher-level and more foolproof APIs like
+    /// `get` should be preferred.
+    ///
+    /// Immutable raw entries have very limited use; you might instead want `raw_entry_mut`.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn raw_entry(&self) -> RawEntryBuilder<'_, K, V, S> {
+        RawEntryBuilder { map: self }
+    }
+}
+
+/// A builder for computing where in a [`HashMap`] a key-value pair would be stored.
+///
+/// See the [`HashMap::raw_entry_mut`] docs for usage examples.
+///
+/// [`HashMap::raw_entry_mut`]: struct.HashMap.html#method.raw_entry_mut
+pub struct RawEntryBuilderMut<'a, K, V, S> {
+    map: &'a mut HashMap<K, V, S>,
+}
+
+/// A view into a single entry in a map, which may either be vacant or occupied.
+///
+/// This is a lower-level version of [`Entry`].
+///
+/// This `enum` is constructed through the [`raw_entry_mut`] method on [`HashMap`],
+/// then calling one of the methods of that [`RawEntryBuilderMut`].
+///
+/// [`HashMap`]: struct.HashMap.html
+/// [`Entry`]: enum.Entry.html
+/// [`raw_entry_mut`]: struct.HashMap.html#method.raw_entry_mut
+/// [`RawEntryBuilderMut`]: struct.RawEntryBuilderMut.html
+pub enum RawEntryMut<'a, K, V, S> {
+    /// An occupied entry.
+    Occupied(RawOccupiedEntryMut<'a, K, V>),
+    /// A vacant entry.
+    Vacant(RawVacantEntryMut<'a, K, V, S>),
+}
+
+/// A view into an occupied entry in a `HashMap`.
+/// It is part of the [`RawEntryMut`] enum.
+///
+/// [`RawEntryMut`]: enum.RawEntryMut.html
+pub struct RawOccupiedEntryMut<'a, K, V> {
+    elem: Bucket<(K, V)>,
+    table: &'a mut RawTable<(K, V)>,
+}
+
+unsafe impl<K, V> Send for RawOccupiedEntryMut<'_, K, V>
+where
+    K: Send,
+    V: Send,
+{
+}
+unsafe impl<K, V> Sync for RawOccupiedEntryMut<'_, K, V>
+where
+    K: Sync,
+    V: Sync,
+{
+}
+
+/// A view into a vacant entry in a `HashMap`.
+/// It is part of the [`RawEntryMut`] enum.
+///
+/// [`RawEntryMut`]: enum.RawEntryMut.html
+pub struct RawVacantEntryMut<'a, K, V, S> {
+    table: &'a mut RawTable<(K, V)>,
+    hash_builder: &'a S,
+}
+
+/// A builder for computing where in a [`HashMap`] a key-value pair would be stored.
+///
+/// See the [`HashMap::raw_entry`] docs for usage examples.
+///
+/// [`HashMap::raw_entry`]: struct.HashMap.html#method.raw_entry
+pub struct RawEntryBuilder<'a, K, V, S> {
+    map: &'a HashMap<K, V, S>,
+}
+
+impl<'a, K, V, S> RawEntryBuilderMut<'a, K, V, S> {
+    /// Creates a `RawEntryMut` from the given key.
+    #[cfg_attr(feature = "inline-more", inline)]
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_key<Q: ?Sized>(self, k: &Q) -> RawEntryMut<'a, K, V, S>
+    where
+        S: BuildHasher,
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        let mut hasher = self.map.hash_builder.build_hasher();
+        k.hash(&mut hasher);
+        self.from_key_hashed_nocheck(hasher.finish(), k)
+    }
+
+    /// Creates a `RawEntryMut` from the given key and its hash.
+    #[inline]
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_key_hashed_nocheck<Q: ?Sized>(self, hash: u64, k: &Q) -> RawEntryMut<'a, K, V, S>
+    where
+        K: Borrow<Q>,
+        Q: Eq,
+    {
+        self.from_hash(hash, |q| q.borrow().eq(k))
+    }
+}
+
+impl<'a, K, V, S> RawEntryBuilderMut<'a, K, V, S> {
+    /// Creates a `RawEntryMut` from the given hash.
+    #[cfg_attr(feature = "inline-more", inline)]
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_hash<F>(self, hash: u64, is_match: F) -> RawEntryMut<'a, K, V, S>
+    where
+        for<'b> F: FnMut(&'b K) -> bool,
+    {
+        self.search(hash, is_match)
+    }
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn search<F>(self, hash: u64, mut is_match: F) -> RawEntryMut<'a, K, V, S>
+    where
+        for<'b> F: FnMut(&'b K) -> bool,
+    {
+        match self.map.table.find(hash, |(k, _)| is_match(k)) {
+            Some(elem) => RawEntryMut::Occupied(RawOccupiedEntryMut {
+                elem,
+                table: &mut self.map.table,
+            }),
+            None => RawEntryMut::Vacant(RawVacantEntryMut {
+                table: &mut self.map.table,
+                hash_builder: &self.map.hash_builder,
+            }),
+        }
+    }
+}
+
+impl<'a, K, V, S> RawEntryBuilder<'a, K, V, S> {
+    /// Access an entry by key.
+    #[cfg_attr(feature = "inline-more", inline)]
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_key<Q: ?Sized>(self, k: &Q) -> Option<(&'a K, &'a V)>
+    where
+        S: BuildHasher,
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        let mut hasher = self.map.hash_builder.build_hasher();
+        k.hash(&mut hasher);
+        self.from_key_hashed_nocheck(hasher.finish(), k)
+    }
+
+    /// Access an entry by a key and its hash.
+    #[cfg_attr(feature = "inline-more", inline)]
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_key_hashed_nocheck<Q: ?Sized>(self, hash: u64, k: &Q) -> Option<(&'a K, &'a V)>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.from_hash(hash, |q| q.borrow().eq(k))
+    }
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn search<F>(self, hash: u64, mut is_match: F) -> Option<(&'a K, &'a V)>
+    where
+        F: FnMut(&K) -> bool,
+    {
+        self.map
+            .table
+            .find(hash, |(k, _)| is_match(k))
+            .map(|item| unsafe {
+                let &(ref key, ref value) = item.as_ref();
+                (key, value)
+            })
+    }
+
+    /// Access an entry by hash.
+    #[cfg_attr(feature = "inline-more", inline)]
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_hash<F>(self, hash: u64, is_match: F) -> Option<(&'a K, &'a V)>
+    where
+        F: FnMut(&K) -> bool,
+    {
+        self.search(hash, is_match)
+    }
+}
+
+impl<'a, K, V, S> RawEntryMut<'a, K, V, S> {
+    /// Sets the value of the entry, and returns a RawOccupiedEntryMut.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    /// let entry = map.raw_entry_mut().from_key("horseyland").insert("horseyland", 37);
+    ///
+    /// assert_eq!(entry.remove_entry(), ("horseyland", 37));
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert(self, key: K, value: V) -> RawOccupiedEntryMut<'a, K, V>
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            RawEntryMut::Occupied(mut entry) => {
+                entry.insert(value);
+                entry
+            }
+            RawEntryMut::Vacant(entry) => entry.insert_entry(key, value),
+        }
+    }
+
+    /// Ensures a value is in the entry by inserting the default if empty, and returns
+    /// mutable references to the key and value in the entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    ///
+    /// map.raw_entry_mut().from_key("poneyland").or_insert("poneyland", 3);
+    /// assert_eq!(map["poneyland"], 3);
+    ///
+    /// *map.raw_entry_mut().from_key("poneyland").or_insert("poneyland", 10).1 *= 2;
+    /// assert_eq!(map["poneyland"], 6);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn or_insert(self, default_key: K, default_val: V) -> (&'a mut K, &'a mut V)
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            RawEntryMut::Occupied(entry) => entry.into_key_value(),
+            RawEntryMut::Vacant(entry) => entry.insert(default_key, default_val),
+        }
+    }
+
+    /// Ensures a value is in the entry by inserting the result of the default function if empty,
+    /// and returns mutable references to the key and value in the entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<&str, String> = HashMap::new();
+    ///
+    /// map.raw_entry_mut().from_key("poneyland").or_insert_with(|| {
+    ///     ("poneyland", "hoho".to_string())
+    /// });
+    ///
+    /// assert_eq!(map["poneyland"], "hoho".to_string());
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn or_insert_with<F>(self, default: F) -> (&'a mut K, &'a mut V)
+    where
+        F: FnOnce() -> (K, V),
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            RawEntryMut::Occupied(entry) => entry.into_key_value(),
+            RawEntryMut::Vacant(entry) => {
+                let (k, v) = default();
+                entry.insert(k, v)
+            }
+        }
+    }
+
+    /// Provides in-place mutable access to an occupied entry before any
+    /// potential inserts into the map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    ///
+    /// let mut map: HashMap<&str, u32> = HashMap::new();
+    ///
+    /// map.raw_entry_mut()
+    ///    .from_key("poneyland")
+    ///    .and_modify(|_k, v| { *v += 1 })
+    ///    .or_insert("poneyland", 42);
+    /// assert_eq!(map["poneyland"], 42);
+    ///
+    /// map.raw_entry_mut()
+    ///    .from_key("poneyland")
+    ///    .and_modify(|_k, v| { *v += 1 })
+    ///    .or_insert("poneyland", 0);
+    /// assert_eq!(map["poneyland"], 43);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn and_modify<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&mut K, &mut V),
+    {
+        match self {
+            RawEntryMut::Occupied(mut entry) => {
+                {
+                    let (k, v) = entry.get_key_value_mut();
+                    f(k, v);
+                }
+                RawEntryMut::Occupied(entry)
+            }
+            RawEntryMut::Vacant(entry) => RawEntryMut::Vacant(entry),
+        }
+    }
+}
+
+impl<'a, K, V> RawOccupiedEntryMut<'a, K, V> {
+    /// Gets a reference to the key in the entry.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn key(&self) -> &K {
+        unsafe { &self.elem.as_ref().0 }
+    }
+
+    /// Gets a mutable reference to the key in the entry.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn key_mut(&mut self) -> &mut K {
+        unsafe { &mut self.elem.as_mut().0 }
+    }
+
+    /// Converts the entry into a mutable reference to the key in the entry
+    /// with a lifetime bound to the map itself.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn into_key(self) -> &'a mut K {
+        unsafe { &mut self.elem.as_mut().0 }
+    }
+
+    /// Gets a reference to the value in the entry.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn get(&self) -> &V {
+        unsafe { &self.elem.as_ref().1 }
+    }
+
+    /// Converts the OccupiedEntry into a mutable reference to the value in the entry
+    /// with a lifetime bound to the map itself.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn into_mut(self) -> &'a mut V {
+        unsafe { &mut self.elem.as_mut().1 }
+    }
+
+    /// Gets a mutable reference to the value in the entry.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn get_mut(&mut self) -> &mut V {
+        unsafe { &mut self.elem.as_mut().1 }
+    }
+
+    /// Gets a reference to the key and value in the entry.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn get_key_value(&mut self) -> (&K, &V) {
+        unsafe {
+            let &(ref key, ref value) = self.elem.as_ref();
+            (key, value)
+        }
+    }
+
+    /// Gets a mutable reference to the key and value in the entry.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn get_key_value_mut(&mut self) -> (&mut K, &mut V) {
+        unsafe {
+            let &mut (ref mut key, ref mut value) = self.elem.as_mut();
+            (key, value)
+        }
+    }
+
+    /// Converts the OccupiedEntry into a mutable reference to the key and value in the entry
+    /// with a lifetime bound to the map itself.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn into_key_value(self) -> (&'a mut K, &'a mut V) {
+        unsafe {
+            let &mut (ref mut key, ref mut value) = self.elem.as_mut();
+            (key, value)
+        }
+    }
+
+    /// Sets the value of the entry, and returns the entry's old value.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert(&mut self, value: V) -> V {
+        mem::replace(self.get_mut(), value)
+    }
+
+    /// Sets the value of the entry, and returns the entry's old value.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert_key(&mut self, key: K) -> K {
+        mem::replace(self.key_mut(), key)
+    }
+
+    /// Takes the value out of the entry, and returns it.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn remove(self) -> V {
+        self.remove_entry().1
+    }
+
+    /// Take the ownership of the key and value from the map.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn remove_entry(self) -> (K, V) {
+        unsafe { self.table.remove(self.elem) }
+    }
+}
+
+impl<'a, K, V, S> RawVacantEntryMut<'a, K, V, S> {
+    /// Sets the value of the entry with the VacantEntry's key,
+    /// and returns a mutable reference to it.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert(self, key: K, value: V) -> (&'a mut K, &'a mut V)
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        let mut hasher = self.hash_builder.build_hasher();
+        key.hash(&mut hasher);
+        self.insert_hashed_nocheck(hasher.finish(), key, value)
+    }
+
+    /// Sets the value of the entry with the VacantEntry's key,
+    /// and returns a mutable reference to it.
+    #[cfg_attr(feature = "inline-more", inline)]
+    #[allow(clippy::shadow_unrelated)]
+    pub fn insert_hashed_nocheck(self, hash: u64, key: K, value: V) -> (&'a mut K, &'a mut V)
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        let hash_builder = self.hash_builder;
+        self.insert_with_hasher(hash, key, value, |k| make_hash(hash_builder, k))
+    }
+
+    /// Set the value of an entry with a custom hasher function.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert_with_hasher<H>(
+        self,
+        hash: u64,
+        key: K,
+        value: V,
+        hasher: H,
+    ) -> (&'a mut K, &'a mut V)
+    where
+        H: Fn(&K) -> u64,
+    {
+        unsafe {
+            let elem = self.table.insert(hash, (key, value), |x| hasher(&x.0));
+            let &mut (ref mut k, ref mut v) = elem.as_mut();
+            (k, v)
+        }
+    }
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn insert_entry(self, key: K, value: V) -> RawOccupiedEntryMut<'a, K, V>
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        let hash_builder = self.hash_builder;
+        let mut hasher = self.hash_builder.build_hasher();
+        key.hash(&mut hasher);
+
+        let elem = self.table.insert(hasher.finish(), (key, value), |k| {
+            make_hash(hash_builder, &k.0)
+        });
+
+        RawOccupiedEntryMut {
+            elem,
+            table: self.table,
+        }
+    }
+}
+
+impl<K, V, S> Debug for RawEntryBuilderMut<'_, K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawEntryBuilder").finish()
+    }
+}
+
+impl<K: Debug, V: Debug, S> Debug for RawEntryMut<'_, K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            RawEntryMut::Vacant(ref v) => f.debug_tuple("RawEntry").field(v).finish(),
+            RawEntryMut::Occupied(ref o) => f.debug_tuple("RawEntry").field(o).finish(),
+        }
+    }
+}
+
+impl<K: Debug, V: Debug> Debug for RawOccupiedEntryMut<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawOccupiedEntryMut")
+            .field("key", self.key())
+            .field("value", self.get())
+            .finish()
+    }
+}
+
+impl<K, V, S> Debug for RawVacantEntryMut<'_, K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawVacantEntryMut").finish()
+    }
+}
+
+impl<K, V, S> Debug for RawEntryBuilder<'_, K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawEntryBuilder").finish()
+    }
+}
+
 #[cfg(test)]
 #[cfg(not(tarpaulin_include))] // don't count for coverage
 mod test_map {
@@ -3247,4 +3803,154 @@ mod test_map {
             assert_eq!(m.table.len(), left);
         }
     }
+
+    #[test]
+    fn test_raw_entry() {
+        use super::RawEntryMut::{Occupied, Vacant};
+
+        let xs = [(1i32, 10i32), (2, 20), (3, 30), (4, 40), (5, 50), (6, 60)];
+
+        let mut map: HashMap<_, _> = xs.iter().cloned().collect();
+
+        let compute_hash = |map: &HashMap<i32, i32>, k: i32| -> u64 {
+            use core::hash::{BuildHasher, Hash, Hasher};
+
+            let mut hasher = map.hasher().build_hasher();
+            k.hash(&mut hasher);
+            hasher.finish()
+        };
+
+        // Existing key (insert)
+        match map.raw_entry_mut().from_key(&1) {
+            Vacant(_) => unreachable!(),
+            Occupied(mut view) => {
+                assert_eq!(view.get(), &10);
+                assert_eq!(view.insert(100), 10);
+            }
+        }
+        let hash1 = compute_hash(&map, 1);
+        assert_eq!(map.raw_entry().from_key(&1).unwrap(), (&1, &100));
+        assert_eq!(
+            map.raw_entry().from_hash(hash1, |k| *k == 1).unwrap(),
+            (&1, &100)
+        );
+        assert_eq!(
+            map.raw_entry().from_key_hashed_nocheck(hash1, &1).unwrap(),
+            (&1, &100)
+        );
+        assert_eq!(map.len(), 6);
+
+        // Existing key (update)
+        match map.raw_entry_mut().from_key(&2) {
+            Vacant(_) => unreachable!(),
+            Occupied(mut view) => {
+                let v = view.get_mut();
+                let new_v = (*v) * 10;
+                *v = new_v;
+            }
+        }
+        let hash2 = compute_hash(&map, 2);
+        assert_eq!(map.raw_entry().from_key(&2).unwrap(), (&2, &200));
+        assert_eq!(
+            map.raw_entry().from_hash(hash2, |k| *k == 2).unwrap(),
+            (&2, &200)
+        );
+        assert_eq!(
+            map.raw_entry().from_key_hashed_nocheck(hash2, &2).unwrap(),
+            (&2, &200)
+        );
+        assert_eq!(map.len(), 6);
+
+        // Existing key (take)
+        let hash3 = compute_hash(&map, 3);
+        match map.raw_entry_mut().from_key_hashed_nocheck(hash3, &3) {
+            Vacant(_) => unreachable!(),
+            Occupied(view) => {
+                assert_eq!(view.remove_entry(), (3, 30));
+            }
+        }
+        assert_eq!(map.raw_entry().from_key(&3), None);
+        assert_eq!(map.raw_entry().from_hash(hash3, |k| *k == 3), None);
+        assert_eq!(map.raw_entry().from_key_hashed_nocheck(hash3, &3), None);
+        assert_eq!(map.len(), 5);
+
+        // Nonexistent key (insert)
+        match map.raw_entry_mut().from_key(&10) {
+            Occupied(_) => unreachable!(),
+            Vacant(view) => {
+                assert_eq!(view.insert(10, 1000), (&mut 10, &mut 1000));
+            }
+        }
+        assert_eq!(map.raw_entry().from_key(&10).unwrap(), (&10, &1000));
+        assert_eq!(map.len(), 6);
+
+        // Ensure all lookup methods produce equivalent results.
+        for k in 0..12 {
+            let hash = compute_hash(&map, k);
+            let v = map.get(&k).cloned();
+            let kv = v.as_ref().map(|v| (&k, v));
+
+            assert_eq!(map.raw_entry().from_key(&k), kv);
+            assert_eq!(map.raw_entry().from_hash(hash, |q| *q == k), kv);
+            assert_eq!(map.raw_entry().from_key_hashed_nocheck(hash, &k), kv);
+
+            match map.raw_entry_mut().from_key(&k) {
+                Occupied(mut o) => assert_eq!(Some(o.get_key_value()), kv),
+                Vacant(_) => assert_eq!(v, None),
+            }
+            match map.raw_entry_mut().from_key_hashed_nocheck(hash, &k) {
+                Occupied(mut o) => assert_eq!(Some(o.get_key_value()), kv),
+                Vacant(_) => assert_eq!(v, None),
+            }
+            match map.raw_entry_mut().from_hash(hash, |q| *q == k) {
+                Occupied(mut o) => assert_eq!(Some(o.get_key_value()), kv),
+                Vacant(_) => assert_eq!(v, None),
+            }
+        }
+    }
+}
+
+#[test]
+fn test_key_without_hash_impl() {
+    #[derive(Debug)]
+    struct IntWrapper(u64);
+
+    let mut m: HashMap<IntWrapper, (), ()> = HashMap::default();
+    {
+        assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_none());
+    }
+    {
+        let vacant_entry = match m.raw_entry_mut().from_hash(0, |k| k.0 == 0) {
+            RawEntryMut::Occupied(..) => panic!("Found entry for key 0"),
+            RawEntryMut::Vacant(e) => e,
+        };
+        vacant_entry.insert_with_hasher(0, IntWrapper(0), (), |k| k.0);
+    }
+    {
+        assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_some());
+        assert!(m.raw_entry().from_hash(1, |k| k.0 == 1).is_none());
+        assert!(m.raw_entry().from_hash(2, |k| k.0 == 2).is_none());
+    }
+    {
+        let vacant_entry = match m.raw_entry_mut().from_hash(1, |k| k.0 == 1) {
+            RawEntryMut::Vacant(e) => e,
+            RawEntryMut::Occupied(..) => panic!("Found entry for key 1"),
+        };
+        vacant_entry.insert_with_hasher(1, IntWrapper(1), (), |k| k.0);
+    }
+    {
+        assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_some());
+        assert!(m.raw_entry().from_hash(1, |k| k.0 == 1).is_some());
+        assert!(m.raw_entry().from_hash(2, |k| k.0 == 2).is_none());
+    }
+    {
+        let occupied_entry = match m.raw_entry_mut().from_hash(0, |k| k.0 == 0) {
+            RawEntryMut::Occupied(e) => e,
+            RawEntryMut::Vacant(..) => panic!("Couldn't find entry for key 0"),
+        };
+        occupied_entry.remove();
+    }
+    assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_none());
+    assert!(m.raw_entry().from_hash(1, |k| k.0 == 1).is_some());
+    assert!(m.raw_entry().from_hash(2, |k| k.0 == 2).is_none());
 }
