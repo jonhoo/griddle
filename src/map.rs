@@ -3351,6 +3351,10 @@ mod test_map {
 
         #[cfg(not(any(tarpaulin, miri)))]
         const M: usize = 1001;
+        #[cfg(tarpaulin)]
+        const M: usize = 101;
+        #[cfg(miri)]
+        const M: usize = 16;
 
         for i in 0..M {
             m.raw_entry_mut()
