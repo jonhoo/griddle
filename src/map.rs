@@ -1594,7 +1594,6 @@ impl<'a, K, V, S> RawEntryMut<'a, K, V, S> {
     /// ```
     /// use griddle::HashMap;
     ///
-    ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     ///
     /// map.raw_entry_mut()
@@ -1778,7 +1777,6 @@ impl<'a, K, V, S> RawVacantEntryMut<'a, K, V, S> {
         let elem = self.table.insert(hasher.finish(), (key, value), |k| {
             make_hash(hash_builder, &k.0)
         });
-
         RawOccupiedEntryMut {
             elem,
             table: self.table,
