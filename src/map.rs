@@ -2729,7 +2729,7 @@ impl<K, V, S> Debug for RawEntryBuilder<'_, K, V, S> {
 mod test_map {
     use super::DefaultHashBuilder;
     use super::Entry::{Occupied, Vacant};
-    use super::HashMap;
+    use super::{HashMap, RawEntryMut};
     use crate::TryReserveError::*;
     use rand::{rngs::SmallRng, Rng, SeedableRng};
     use std::cell::RefCell;
@@ -2854,6 +2854,74 @@ mod test_map {
         assert_eq!(m.capacity(), 14);
         for i in 1..=9 {
             assert_eq!(m.get(&i), Some(&i));
+        }
+    }
+
+    #[test]
+    fn test_split_insert_raw() {
+        // the code below assumes that R is 4
+        assert_eq!(crate::raw::R, 4);
+
+        let mut m = HashMap::new();
+        assert_eq!(m.capacity(), 0);
+
+        // three inserts won't split
+        for i in 1..=3 {
+            m.raw_entry_mut().from_key(&i).insert(i, i);
+            assert_eq!(m.raw_entry().map.get(&i), Some(&i));
+            assert_eq!(m.raw_entry().map.capacity(), 3);
+        }
+        // fourth insert will split and migrate all elements
+        assert!(!m.raw_entry().map.is_split());
+        m.raw_entry_mut().from_key(&4).insert(4, 4);
+        // capacity should now be doubled
+        assert_eq!(m.raw_entry().map.capacity(), 7);
+        // and there should be no leftovers
+        assert!(!m.raw_entry().map.is_split());
+        assert_eq!(m.raw_entry().map.table.len(), 4);
+        for i in 1..=4 {
+            assert_eq!(m.raw_entry().map.get(&i), Some(&i));
+        }
+
+        // move to next split point
+        for i in 5..=7 {
+            m.raw_entry_mut().from_key(&i).insert(i, i);
+            assert_eq!(m.raw_entry().map.get(&i), Some(&i));
+            assert_eq!(m.raw_entry().map.capacity(), 7);
+        }
+
+        // next insert will split, and move some, but not all (since R < old.len())
+        m.raw_entry_mut().map.insert(8, 8);
+        // capacity should now be doubled
+        assert_eq!(m.raw_entry_mut().map.capacity(), 14);
+        // and there should be leftovers
+        assert!(m.raw_entry().map.is_split());
+        assert_eq!(m.raw_entry().map.table.main().len(), 1 + crate::raw::R);
+        assert_eq!(
+            m.raw_entry().map.table.leftovers().map(|t| t.len()),
+            Some(8 - (1 + crate::raw::R))
+        );
+        for i in 1..=8 {
+            assert_eq!(m.raw_entry().map.get(&i), Some(&i));
+        }
+        // check that the iterators do the right thing when split:
+        assert_eq!(m.raw_entry().map.iter().count(), 8);
+        for i in 1..=8 {
+            assert!(m.raw_entry().map.iter().any(|(&e, _)| e == i));
+        }
+        assert_eq!(m.raw_entry_mut().map.iter_mut().count(), 8);
+        for i in 1..=8 {
+            assert!(m.raw_entry_mut().map.iter_mut().any(|(&e, _)| e == i));
+        }
+
+        // if we do another insert, it will move the rest of the items from the old map
+        m.insert(9, 9);
+        assert!(!m.raw_entry().map.is_split());
+        assert_eq!(m.raw_entry().map.table.len(), 9);
+        // it should not have changed capacity
+        assert_eq!(m.raw_entry().map.capacity(), 14);
+        for i in 1..=9 {
+            assert_eq!(m.raw_entry().map.get(&i), Some(&i));
         }
     }
 
@@ -3057,6 +3125,26 @@ mod test_map {
     }
 
     #[test]
+    fn test_empty_raw_entry() {
+        let mut m: HashMap<i32, bool> = HashMap::new();
+        assert_eq!(m.raw_entry().map.len(), 0);
+        assert!(*m.entry(0).or_insert(true));
+        assert_eq!(m.raw_entry().map.len(), 1);
+    }
+
+    #[test]
+    fn test_empty_raw_entry_mut() {
+        use super::RawEntryMut::{Occupied, Vacant};
+        let mut m: HashMap<i32, bool> = HashMap::new();
+        match m.raw_entry_mut().from_key(&0) {
+            Occupied(_) => panic!(),
+            Vacant(_) => {}
+        }
+        assert!(*m.raw_entry_mut().from_key(&0).or_insert(0, true).1);
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
     fn test_empty_iter() {
         let mut m: HashMap<i32, bool> = HashMap::new();
         assert_eq!(m.drain().next(), None);
@@ -3146,6 +3234,97 @@ mod test_map {
     }
 
     #[test]
+    fn test_lots_of_raw_insertions() {
+        let mut m = HashMap::new();
+
+        #[cfg(not(any(tarpaulin, miri)))]
+        const N: usize = 10;
+        #[cfg(any(tarpaulin, miri))]
+        const N: usize = 5;
+
+        #[cfg(not(any(tarpaulin, miri)))]
+        const M: usize = 1001;
+        #[cfg(tarpaulin)]
+        const M: usize = 101;
+        #[cfg(miri)]
+        const M: usize = 16;
+
+        // Try this a few times to make sure we never screw up the hashmap's
+        // internal state.
+        for _ in 0..N {
+            assert!(m.is_empty());
+
+            for i in 1..M {
+                m.raw_entry_mut().from_key(&i).insert(i, i);
+                assert_eq!(m.raw_entry().from_key(&i).unwrap(), (&i, &i));
+
+                for j in 1..=i {
+                    let r = m.raw_entry().from_key(&j);
+                    assert_eq!(r, Some((&j, &j)));
+                }
+
+                for j in i + 1..M {
+                    let r = m.raw_entry().from_key(&j);
+                    assert_eq!(r, None);
+                }
+            }
+
+            for i in M..(M * 2 - 1) {
+                assert!(!m.contains_key(&i));
+            }
+
+            // remove forwards
+            for i in 1..M {
+                assert!(m.remove(&i).is_some());
+
+                for j in 1..=i {
+                    assert!(!m.contains_key(&j));
+                }
+
+                for j in i + 1..M {
+                    assert!(m.contains_key(&j));
+                }
+            }
+
+            for i in 1..M {
+                assert!(!m.contains_key(&i));
+            }
+
+            for i in 1..M {
+                m.raw_entry_mut().from_key(&i).or_insert(i, i);
+            }
+
+            for i in (1..M).rev() {
+                assert!(m.remove(&i).is_some());
+
+                for j in i..M {
+                    assert!(!m.contains_key(&j));
+                }
+
+                for j in 1..i {
+                    assert!(m.contains_key(&j));
+                }
+            }
+
+            for i in 1..M {
+                m.raw_entry_mut().from_key(&i).or_insert_with(|| (i, i));
+            }
+
+            for i in (1..M).rev() {
+                assert!(m.remove(&i).is_some());
+
+                for j in i..M {
+                    assert!(!m.contains_key(&j));
+                }
+
+                for j in 1..i {
+                    assert!(m.contains_key(&j));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_find_mut() {
         let mut m = HashMap::new();
         // ensure that the map splits
@@ -3164,6 +3343,41 @@ mod test_map {
             Some(x) => *x = new,
         }
         assert_eq!(m.get(&5), Some(&new));
+    }
+
+    #[test]
+    fn test_raw_entry_mut_and_modify() {
+        let mut m = HashMap::new();
+
+        #[cfg(not(any(tarpaulin, miri)))]
+        const M: usize = 1001;
+
+        for i in 0..M {
+            m.raw_entry_mut()
+                .from_key(&i)
+                .and_modify(|_k, v| *v += 1)
+                .or_insert(i, i);
+        }
+
+        for i in (0..M).rev() {
+            assert_eq!(
+                *m.raw_entry_mut()
+                    .from_key(&i)
+                    .and_modify(|_k, _v| ())
+                    .or_insert(i, i)
+                    .0,
+                i
+            );
+
+            assert_eq!(
+                *m.raw_entry_mut()
+                    .from_key(&i)
+                    .and_modify(|_k, v| *v += 1)
+                    .or_insert(i, i)
+                    .1,
+                i + 1
+            );
+        }
     }
 
     #[test]
@@ -3808,7 +4022,18 @@ mod test_map {
     fn test_raw_entry() {
         use super::RawEntryMut::{Occupied, Vacant};
 
-        let xs = [(1i32, 10i32), (2, 20), (3, 30), (4, 40), (5, 50), (6, 60)];
+        let xs = [
+            (1i32, 10i32),
+            (2, 20),
+            (3, 30),
+            (4, 40),
+            (5, 50),
+            (6, 60),
+            (7, 70),
+            (8, 80),
+            (9, 90),
+            (10, 100),
+        ];
 
         let mut map: HashMap<_, _> = xs.iter().cloned().collect();
 
@@ -3838,7 +4063,7 @@ mod test_map {
             map.raw_entry().from_key_hashed_nocheck(hash1, &1).unwrap(),
             (&1, &100)
         );
-        assert_eq!(map.len(), 6);
+        assert_eq!(map.len(), 10);
 
         // Existing key (update)
         match map.raw_entry_mut().from_key(&2) {
@@ -3859,7 +4084,7 @@ mod test_map {
             map.raw_entry().from_key_hashed_nocheck(hash2, &2).unwrap(),
             (&2, &200)
         );
-        assert_eq!(map.len(), 6);
+        assert_eq!(map.len(), 10);
 
         // Existing key (take)
         let hash3 = compute_hash(&map, 3);
@@ -3872,17 +4097,17 @@ mod test_map {
         assert_eq!(map.raw_entry().from_key(&3), None);
         assert_eq!(map.raw_entry().from_hash(hash3, |k| *k == 3), None);
         assert_eq!(map.raw_entry().from_key_hashed_nocheck(hash3, &3), None);
-        assert_eq!(map.len(), 5);
+        assert_eq!(map.len(), 9);
 
         // Nonexistent key (insert)
-        match map.raw_entry_mut().from_key(&10) {
+        match map.raw_entry_mut().from_key(&11) {
             Occupied(_) => unreachable!(),
             Vacant(view) => {
-                assert_eq!(view.insert(10, 1000), (&mut 10, &mut 1000));
+                assert_eq!(view.insert(11, 1100), (&mut 11, &mut 1100));
             }
         }
-        assert_eq!(map.raw_entry().from_key(&10).unwrap(), (&10, &1000));
-        assert_eq!(map.len(), 6);
+        assert_eq!(map.raw_entry().from_key(&10).unwrap(), (&10, &100));
+        assert_eq!(map.len(), 10);
 
         // Ensure all lookup methods produce equivalent results.
         for k in 0..12 {
@@ -3908,49 +4133,89 @@ mod test_map {
             }
         }
     }
-}
 
-#[test]
-fn test_key_without_hash_impl() {
-    #[derive(Debug)]
-    struct IntWrapper(u64);
+    #[test]
+    fn test_raw_occupied_entry_mut() {
+        #[cfg(not(any(tarpaulin, miri)))]
+        const M: usize = 1001;
+        #[cfg(tarpaulin)]
+        const M: usize = 101;
+        #[cfg(miri)]
+        const M: usize = 16;
 
-    let mut m: HashMap<IntWrapper, (), ()> = HashMap::default();
-    {
+        #[cfg(not(any(tarpaulin, miri)))]
+        const N: usize = 10;
+        #[cfg(any(tarpaulin, miri))]
+        const N: usize = 5;
+
+        let mut m = HashMap::new();
+
+        for i in 0..M {
+            let mut entry = m.raw_entry_mut().from_key(&i).insert(i, i);
+            assert_eq!(entry.key(), &i);
+            assert_eq!(entry.get(), &i);
+            assert_eq!(entry.get_key_value(), (&i, &i));
+            assert_eq!(entry.key_mut(), &i);
+            assert_eq!(entry.get_mut(), &i);
+            assert_eq!(entry.into_key(), &i);
+        }
+
+        for i in M..(M + N) {
+            let mut entry = m.raw_entry_mut().from_key(&i).insert(i, i);
+            entry.insert_key(i + 1);
+            assert_eq!(entry.into_key_value().0, &mut (i + 1));
+        }
+
+        for i in (0..M).rev() {
+            let entry = m.raw_entry_mut().from_key(&i).insert(i, i);
+            assert_eq!(entry.remove_entry(), (i, i));
+        }
+
+        assert_eq!(m.raw_entry().map.len(), N);
+    }
+
+    #[test]
+    fn test_key_without_hash_impl() {
+        #[derive(Debug)]
+        struct IntWrapper(u64);
+
+        let mut m: HashMap<IntWrapper, (), ()> = HashMap::default();
+        {
+            assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_none());
+        }
+        {
+            let vacant_entry = match m.raw_entry_mut().from_hash(0, |k| k.0 == 0) {
+                RawEntryMut::Occupied(..) => panic!("Found entry for key 0"),
+                RawEntryMut::Vacant(e) => e,
+            };
+            vacant_entry.insert_with_hasher(0, IntWrapper(0), (), |k| k.0);
+        }
+        {
+            assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_some());
+            assert!(m.raw_entry().from_hash(1, |k| k.0 == 1).is_none());
+            assert!(m.raw_entry().from_hash(2, |k| k.0 == 2).is_none());
+        }
+        {
+            let vacant_entry = match m.raw_entry_mut().from_hash(1, |k| k.0 == 1) {
+                RawEntryMut::Occupied(..) => panic!("Found entry for key 1"),
+                RawEntryMut::Vacant(e) => e,
+            };
+            vacant_entry.insert_with_hasher(1, IntWrapper(1), (), |k| k.0);
+        }
+        {
+            assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_some());
+            assert!(m.raw_entry().from_hash(1, |k| k.0 == 1).is_some());
+            assert!(m.raw_entry().from_hash(2, |k| k.0 == 2).is_none());
+        }
+        {
+            let occupied_entry = match m.raw_entry_mut().from_hash(0, |k| k.0 == 0) {
+                RawEntryMut::Occupied(e) => e,
+                RawEntryMut::Vacant(..) => panic!("Couldn't find entry for key 0"),
+            };
+            occupied_entry.remove();
+        }
         assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_none());
-    }
-    {
-        let vacant_entry = match m.raw_entry_mut().from_hash(0, |k| k.0 == 0) {
-            RawEntryMut::Occupied(..) => panic!("Found entry for key 0"),
-            RawEntryMut::Vacant(e) => e,
-        };
-        vacant_entry.insert_with_hasher(0, IntWrapper(0), (), |k| k.0);
-    }
-    {
-        assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_some());
-        assert!(m.raw_entry().from_hash(1, |k| k.0 == 1).is_none());
-        assert!(m.raw_entry().from_hash(2, |k| k.0 == 2).is_none());
-    }
-    {
-        let vacant_entry = match m.raw_entry_mut().from_hash(1, |k| k.0 == 1) {
-            RawEntryMut::Vacant(e) => e,
-            RawEntryMut::Occupied(..) => panic!("Found entry for key 1"),
-        };
-        vacant_entry.insert_with_hasher(1, IntWrapper(1), (), |k| k.0);
-    }
-    {
-        assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_some());
         assert!(m.raw_entry().from_hash(1, |k| k.0 == 1).is_some());
         assert!(m.raw_entry().from_hash(2, |k| k.0 == 2).is_none());
     }
-    {
-        let occupied_entry = match m.raw_entry_mut().from_hash(0, |k| k.0 == 0) {
-            RawEntryMut::Occupied(e) => e,
-            RawEntryMut::Vacant(..) => panic!("Couldn't find entry for key 0"),
-        };
-        occupied_entry.remove();
-    }
-    assert!(m.raw_entry().from_hash(0, |k| k.0 == 0).is_none());
-    assert!(m.raw_entry().from_hash(1, |k| k.0 == 1).is_some());
-    assert!(m.raw_entry().from_hash(2, |k| k.0 == 2).is_none());
 }
