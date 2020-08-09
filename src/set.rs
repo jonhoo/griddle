@@ -628,7 +628,11 @@ where
         T: Borrow<Q>,
         Q: Hash + Eq,
     {
-        self.map.get_key_value(value).map(|(k, _)| k)
+        // Avoid `Option::map` because it bloats LLVM IR.
+        match self.map.get_key_value(value) {
+            Some((k, _)) => Some(k),
+            None => None,
+        }
     }
 
     /// Returns `true` if `self` has no elements in common with `other`.
@@ -800,7 +804,11 @@ where
         T: Borrow<Q>,
         Q: Hash + Eq,
     {
-        self.map.remove_entry(value).map(|(k, _)| k)
+        // Avoid `Option::map` because it bloats LLVM IR.
+        match self.map.remove_entry(value) {
+            Some((k, _)) => Some(k),
+            None => None,
+        }
     }
 }
 
@@ -1188,7 +1196,11 @@ impl<K> Iterator for IntoIter<K> {
 
     #[cfg_attr(feature = "inline-more", inline)]
     fn next(&mut self) -> Option<K> {
-        self.iter.next().map(|(k, _)| k)
+        // Avoid `Option::map` because it bloats LLVM IR.
+        match self.iter.next() {
+            Some((k, _)) => Some(k),
+            None => None,
+        }
     }
     #[cfg_attr(feature = "inline-more", inline)]
     fn size_hint(&self) -> (usize, Option<usize>) {
