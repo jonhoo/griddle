@@ -43,10 +43,10 @@ jobs:
          rust: $(nightly)
          components:
            - miri
-     - script: cargo miri setup
-       displayName: cargo miri setup
-     - script: cargo miri test --features serde,raw -- -Zmiri-ignore-leaks
+     - script: cargo miri test --features serde,raw
        displayName: cargo miri test
+       env:
+         MIRIFLAGS: -Zmiri-ignore-leaks
 
 resources:
   repositories:
