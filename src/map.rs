@@ -4333,9 +4333,11 @@ mod test_map {
                             left -= 1;
                         } else {
                             assert!(removed.contains(&(i, 2 * i)), "{} not in {:?}", i, removed);
-                            let e = m
-                                .table
-                                .insert(hash, (i, 2 * i), |x| super::make_hash(&hasher, &x.0));
+                            let e = m.table.insert(
+                                hash,
+                                (i, 2 * i),
+                                super::make_hasher::<usize, _, _, _>(&hasher),
+                            );
                             it.reflect_insert(&e);
                             if let Some(p) = removed.iter().position(|e| e == &(i, 2 * i)) {
                                 removed.swap_remove(p);
