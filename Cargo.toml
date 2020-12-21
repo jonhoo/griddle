@@ -1,6 +1,6 @@
 [package]
 name = "griddle"
-version = "0.3.2"
+version = "0.4.0"
 authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -13,31 +13,30 @@ keywords = ["hash", "no_std", "hashmap", "amortized"]
 categories = ["data-structures", "no-std"]
 
 [dependencies]
-hashbrown = { version = "0.8.1", default-features = false, features = ["raw"] }
+# For the default hasher
+ahash_ = { version = "0.6.1", default-features = false, optional = true, package = "ahash" }
+
+hashbrown = { version = "0.9.1", default-features = false, features = ["raw"] }
 
 # For external trait impls
 rayon_ = { version = "1.0", optional = true, package = "rayon" }
 serde_ = { version = "1.0.25", default-features = false, optional = true, package = "serde" }
 
 [dev-dependencies]
-lazy_static = "1.2"
+lazy_static = "1.4"
 rand = { version = "0.7.3", features = ["small_rng"] }
 quickcheck = { version = "0.9", default-features = false }
 rayon_ = { version = "1.0", package = "rayon" }
-fnv = "1.0"
-rustc-hash = "1.0"
+fnv = "1.0.7"
 serde_test = "1.0"
 
 [features]
-default = [
-    "ahash",
-    "inline-more",
-]
+default = ["ahash", "inline-more"]
 
+ahash-compile-time-rng = ["ahash_/compile-time-rng"]
+ahash = [ "ahash_", "hashbrown/ahash" ]
 serde = [ "serde_", "hashbrown/serde" ]
 rayon = [ "rayon_", "hashbrown/rayon" ]
-ahash = [ "hashbrown/ahash" ]
-ahash-compile-time-rng = [ "hashbrown/ahash-compile-time-rng" ]
 raw = []
 
 # Enables usage of `#[inline]` on far more functions than by default in this

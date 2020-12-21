@@ -59,7 +59,6 @@
 #[macro_use]
 extern crate std;
 
-#[cfg(feature = "rayon")]
 #[cfg_attr(test, macro_use)]
 extern crate alloc;
 

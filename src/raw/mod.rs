@@ -59,7 +59,7 @@ impl<T> RawTable<T> {
     /// leave the data pointer dangling since that bucket is never written to
     /// due to our load factor forcing us to always have at least 1 free bucket.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             table: raw::RawTable::new(),
             leftovers: None,
@@ -107,6 +107,20 @@ impl<T> RawTable<T> {
         }
     }
 
+    /// Finds and erases an element from the table, dropping it in place.
+    /// Returns true if an element was found.
+    #[cfg(feature = "raw")]
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn erase_entry(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> bool {
+        // Avoid `Option::map` because it bloats LLVM IR.
+        if let Some(bucket) = self.find(hash, eq) {
+            unsafe { self.erase(bucket) };
+            true
+        } else {
+            false
+        }
+    }
+
     /// Removes an element from the table, returning it.
     #[cfg_attr(feature = "inline-more", inline)]
     pub unsafe fn remove(&mut self, item: Bucket<T>) -> T {
@@ -123,6 +137,16 @@ impl<T> RawTable<T> {
             v
         } else {
             unreachable!("invalid bucket state");
+        }
+    }
+
+    /// Finds and removes an element from the table, returning it.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn remove_entry(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<T> {
+        // Avoid `Option::map` because it bloats LLVM IR.
+        match self.find(hash, eq) {
+            Some(bucket) => Some(unsafe { self.remove(bucket) }),
+            None => None,
         }
     }
 
@@ -232,7 +256,7 @@ impl<T> RawTable<T> {
         }
     }
 
-    /// Inserts a new element into the table.
+    /// Inserts a new element into the table, and returns its raw bucket.
     ///
     /// This does not check if the given element already exists in the table.
     #[cfg_attr(feature = "inline-more", inline)]
@@ -246,6 +270,14 @@ impl<T> RawTable<T> {
         }
 
         self.insert_no_grow(hash, value, hasher)
+    }
+
+    /// Inserts a new element into the table, and returns a mutable reference to it.
+    ///
+    /// This does not check if the given element already exists in the table.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn insert_entry(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> &mut T {
+        unsafe { self.insert(hash, value, hasher).as_mut() }
     }
 
     /// Inserts a new element into the table, without growing the table.
@@ -272,6 +304,34 @@ impl<T> RawTable<T> {
         }
     }
 
+    /// Temporary removes a bucket, applying the given function to the removed
+    /// element and optionally put back the returned value in the same bucket.
+    ///
+    /// Returns `true` if the bucket still contains an element
+    ///
+    /// This does not check if the given bucket is actually occupied.
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub unsafe fn replace_bucket_with<F>(&mut self, bucket: Bucket<T>, f: F) -> bool
+    where
+        F: FnOnce(T) -> Option<T>,
+    {
+        if bucket.in_main {
+            self.table.replace_bucket_with(bucket.bucket, f)
+        } else if let Some(ref mut lo) = self.leftovers {
+            let items = &mut lo.items;
+            let b = bucket.bucket.clone();
+            lo.table.replace_bucket_with(b, move |t| {
+                let v = f(t);
+                if v.is_none() {
+                    items.reflect_remove(&bucket.bucket);
+                }
+                v
+            })
+        } else {
+            unreachable!("invalid bucket state");
+        }
+    }
+
     /// Searches for an element in the table.
     #[inline]
     pub fn find(&self, hash: u64, mut eq: impl FnMut(&T) -> bool) -> Option<Bucket<T>> {
@@ -290,6 +350,26 @@ impl<T> RawTable<T> {
             })
         } else {
             None
+        }
+    }
+
+    /// Gets a reference to an element in the table.
+    #[inline]
+    pub fn get(&self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&T> {
+        // Avoid `Option::map` because it bloats LLVM IR.
+        match self.find(hash, eq) {
+            Some(bucket) => Some(unsafe { bucket.as_ref() }),
+            None => None,
+        }
+    }
+
+    /// Gets a mutable reference to an element in the table.
+    #[inline]
+    pub fn get_mut(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&mut T> {
+        // Avoid `Option::map` because it bloats LLVM IR.
+        match self.find(hash, eq) {
+            Some(bucket) => Some(unsafe { bucket.as_mut() }),
+            None => None,
         }
     }
 
@@ -327,17 +407,15 @@ impl<T> RawTable<T> {
     }
 
     /// Returns an iterator which removes all elements from the table without
-    /// freeing the memory. It is up to the caller to ensure that the `RawTable`
-    /// outlives the `RawDrain`. Because we cannot make the `next` method unsafe
-    /// on the `RawDrain`, we have to make the `drain` method unsafe.
+    /// freeing the memory.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn drain(&mut self) -> RawDrain<'_, T> {
+    pub fn drain(&mut self) -> RawDrain<'_, T> {
         RawDrain {
             table: self.table.drain(),
             leftovers: self
                 .leftovers
                 .take()
-                .map(|lo| lo.table.into_iter_from(lo.items)),
+                .map(|lo| unsafe { lo.table.into_iter_from(lo.items) }),
         }
     }
 
@@ -345,7 +423,8 @@ impl<T> RawTable<T> {
     ///
     /// Iteration starts at the provided iterator's current location.
     ///
-    /// This method panics if the given iterator does not cover all items remaining in the table.
+    /// It is up to the caller to ensure that the iterator is valid for this
+    /// `RawTable` and covers all items that remain in the table.
     pub unsafe fn into_iter_from(self, iter: RawIter<T>) -> RawIntoIter<T> {
         RawIntoIter {
             table: self.table.into_iter_from(iter.table),
@@ -530,6 +609,17 @@ struct OldTable<T> {
 }
 
 /// Iterator which returns a raw pointer to every full bucket in the table.
+///
+/// For maximum flexibility this iterator is not bound by a lifetime, but you
+/// must observe several rules when using it:
+/// - You must not free the hash table while iterating (including via growing/shrinking).
+/// - It is fine to erase a bucket that has been yielded by the iterator.
+/// - Erasing a bucket that has not yet been yielded by the iterator may still
+///   result in the iterator yielding that bucket (unless `reflect_remove` is called).
+/// - It is unspecified whether an element inserted after the iterator was
+///   created will be yielded by that iterator (unless `reflect_insert` is called).
+/// - The order in which the iterator yields bucket is unspecified and may
+///   change in the future.
 pub struct RawIter<T> {
     table: raw::RawIter<T>,
     leftovers: Option<raw::RawIter<T>>,
