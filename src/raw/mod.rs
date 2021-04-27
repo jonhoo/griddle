@@ -472,7 +472,7 @@ impl<T> RawTable<T> {
     #[cold]
     #[inline(never)]
     fn grow(&mut self, extra: usize) {
-        if let Err(_) = self.try_grow(extra, false) {
+        if self.try_grow(extra, false).is_err() {
             unsafe { core::hint::unreachable_unchecked() };
         }
     }
