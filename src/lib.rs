@@ -53,7 +53,7 @@
 #![no_std]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
-#![warn(rustdoc::all)]
+#![warn(rustdoc)]
 // hashbrown does this to avoid LLVM IR bloat in a few places.
 #![allow(clippy::manual_map)]
 
