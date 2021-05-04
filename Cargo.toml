@@ -24,8 +24,8 @@ serde_ = { version = "1.0.25", default-features = false, optional = true, packag
 
 [dev-dependencies]
 lazy_static = "1.4"
-rand = { version = "0.7.3", features = ["small_rng"] }
-quickcheck = { version = "0.9", default-features = false }
+rand = { version = "0.8", features = ["small_rng"] }
+quickcheck = { version = "1", default-features = false }
 rayon_ = { version = "1.0", package = "rayon" }
 fnv = "1.0.7"
 serde_test = "1.0"

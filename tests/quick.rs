@@ -8,8 +8,6 @@ use griddle::HashMap as GriddleMap;
 use quickcheck::Arbitrary;
 use quickcheck::Gen;
 
-use rand::Rng;
-
 use fnv::FnvHasher;
 use std::hash::{BuildHasher, BuildHasherDefault};
 type FnvBuilder = BuildHasherDefault<FnvHasher>;
@@ -78,10 +76,10 @@ quickcheck! {
             elements.iter().all(|k| map.get(k).is_some())
     }
 
-    fn with_cap(cap: usize) -> bool {
-        let map: GriddleMap<u8, u8> = GriddleMap::with_capacity(cap);
+    fn with_cap(cap: u16) -> bool {
+        let map: GriddleMap<u8, u8> = GriddleMap::with_capacity(cap as usize);
         println!("wish: {}, got: {} (diff: {})", cap, map.capacity(), map.capacity() as isize - cap as isize);
-        map.capacity() >= cap
+        map.capacity() >= cap as usize
     }
 }
 
@@ -102,15 +100,15 @@ where
     K: Arbitrary,
     V: Arbitrary,
 {
-    fn arbitrary<G: Gen>(g: &mut G) -> Self {
-        match g.gen::<u32>() % 6 {
+    fn arbitrary(g: &mut Gen) -> Self {
+        match u32::arbitrary(g) % 6 {
             0 => Add(K::arbitrary(g), V::arbitrary(g)),
             1 => AddEntry(K::arbitrary(g), V::arbitrary(g)),
             2 => Remove(K::arbitrary(g)),
             3 => RemoveEntry(K::arbitrary(g)),
             4 => ShrinkToFit,
             5 => ReplaceWithClone,
-            _ => Reserve(g.gen::<u16>()),
+            _ => Reserve(u16::arbitrary(g)),
         }
     }
 }
@@ -267,12 +265,12 @@ impl Deref for Alpha {
 const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
 
 impl Arbitrary for Alpha {
-    fn arbitrary<G: Gen>(g: &mut G) -> Self {
-        let len = g.next_u32() % g.size() as u32;
+    fn arbitrary(g: &mut Gen) -> Self {
+        let len = u32::arbitrary(g) % g.size() as u32;
         let len = min(len, 16);
         Alpha(
             (0..len)
-                .map(|_| ALPHABET[g.next_u32() as usize % ALPHABET.len()] as char)
+                .map(|_| g.choose(ALPHABET).copied().unwrap() as char)
                 .collect(),
         )
     }
@@ -297,8 +295,8 @@ impl<T> Arbitrary for Large<Vec<T>>
 where
     T: Arbitrary,
 {
-    fn arbitrary<G: Gen>(g: &mut G) -> Self {
-        let len = g.next_u32() % (g.size() * 10) as u32;
+    fn arbitrary(g: &mut Gen) -> Self {
+        let len = u32::arbitrary(g) % (g.size() * 10) as u32;
         Large((0..len).map(|_| T::arbitrary(g)).collect())
     }
 
