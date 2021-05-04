@@ -14,9 +14,9 @@ categories = ["data-structures", "no-std"]
 
 [dependencies]
 # For the default hasher
-ahash_ = { version = "0.6.1", default-features = false, optional = true, package = "ahash" }
+ahash_ = { version = "0.7.0", default-features = false, optional = true, package = "ahash" }
 
-hashbrown = { version = "0.9.1", default-features = false, features = ["raw"] }
+hashbrown = { version = "0.11.2", default-features = false, features = ["raw"] }
 
 # For external trait impls
 rayon_ = { version = "1.0", optional = true, package = "rayon" }

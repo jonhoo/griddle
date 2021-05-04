@@ -254,20 +254,10 @@ where
     Q: Hash + ?Sized,
     S: BuildHasher,
 {
-    #[cfg(feature = "ahash")]
-    {
-        //This enables specialization to improve performance on primitive types
-        use ahash_::CallHasher;
-        let state = hash_builder.build_hasher();
-        Q::get_hash(val, state)
-    }
-    #[cfg(not(feature = "ahash"))]
-    {
-        use core::hash::Hasher;
-        let mut state = hash_builder.build_hasher();
-        val.hash(&mut state);
-        state.finish()
-    }
+    use core::hash::Hasher;
+    let mut state = hash_builder.build_hasher();
+    val.hash(&mut state);
+    state.finish()
 }
 
 #[cfg_attr(feature = "inline-more", inline)]
@@ -276,20 +266,10 @@ where
     K: Hash,
     S: BuildHasher,
 {
-    #[cfg(feature = "ahash")]
-    {
-        //This enables specialization to improve performance on primitive types
-        use ahash_::CallHasher;
-        let state = hash_builder.build_hasher();
-        K::get_hash(val, state)
-    }
-    #[cfg(not(feature = "ahash"))]
-    {
-        use core::hash::Hasher;
-        let mut state = hash_builder.build_hasher();
-        val.hash(&mut state);
-        state.finish()
-    }
+    use core::hash::Hasher;
+    let mut state = hash_builder.build_hasher();
+    val.hash(&mut state);
+    state.finish()
 }
 
 #[cfg(feature = "ahash")]
@@ -4385,11 +4365,7 @@ mod test_map {
         let mut map: HashMap<_, _> = xs.iter().cloned().collect();
 
         let compute_hash = |map: &HashMap<i32, i32>, k: i32| -> u64 {
-            use core::hash::{BuildHasher, Hash, Hasher};
-
-            let mut hasher = map.hasher().build_hasher();
-            k.hash(&mut hasher);
-            hasher.finish()
+            super::make_insert_hash::<i32, _>(map.hasher(), &k)
         };
 
         // Existing key (insert)
