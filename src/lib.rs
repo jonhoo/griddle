@@ -53,7 +53,9 @@
 #![no_std]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
-#![warn(rustdoc)]
+// this is #[cfg(test)] so that Rust 1.42 can still compile the crate.
+// tests don't have to commit to MSRV though, so 1.52 is fine there.
+#![cfg_attr(test, warn(rustdoc::all))]
 // hashbrown does this to avoid LLVM IR bloat in a few places.
 #![allow(clippy::manual_map)]
 
