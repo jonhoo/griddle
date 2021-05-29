@@ -4,9 +4,10 @@ use core::borrow::Borrow;
 use core::fmt;
 use core::hash::{BuildHasher, Hash};
 use core::iter::{Chain, FromIterator, FusedIterator};
+use core::mem;
 use core::ops::{BitAnd, BitOr, BitXor, Sub};
 
-use super::map::{self, DefaultHashBuilder, HashMap, Keys};
+use super::map::{self, ConsumeAllOnDrop, DefaultHashBuilder, DrainFilterInner, HashMap, Keys};
 
 // Future Optimization (FIXME!)
 // =============================
@@ -281,6 +282,45 @@ impl<T, S> HashSet<T, S> {
         F: FnMut(&T) -> bool,
     {
         self.map.retain(|k, _| f(k));
+    }
+
+    /// Drains elements which are true under the given predicate,
+    /// and returns an iterator over the removed items.
+    ///
+    /// In other words, move all elements `e` such that `f(&e)` returns `true` out
+    /// into another iterator.
+    ///
+    /// When the returned DrainedFilter is dropped, any remaining elements that satisfy
+    /// the predicate are dropped from the set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashSet;
+    ///
+    /// let mut set: HashSet<i32> = (0..8).collect();
+    /// let drained: HashSet<i32> = set.drain_filter(|v| v % 2 == 0).collect();
+    ///
+    /// let mut evens = drained.into_iter().collect::<Vec<_>>();
+    /// let mut odds = set.into_iter().collect::<Vec<_>>();
+    /// evens.sort();
+    /// odds.sort();
+    ///
+    /// assert_eq!(evens, vec![0, 2, 4, 6]);
+    /// assert_eq!(odds, vec![1, 3, 5, 7]);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn drain_filter<F>(&mut self, f: F) -> DrainFilter<'_, T, F>
+    where
+        F: FnMut(&T) -> bool,
+    {
+        DrainFilter {
+            f,
+            inner: DrainFilterInner {
+                iter: unsafe { self.map.table.iter() },
+                table: &mut self.map.table,
+            },
+        }
     }
 
     /// Clears the set, removing all values.
@@ -1199,6 +1239,21 @@ pub struct Drain<'a, K> {
     iter: map::Drain<'a, K, ()>,
 }
 
+/// A draining iterator over entries of a `HashSet` which don't satisfy the predicate `f`.
+///
+/// This `struct` is created by the [`drain_filter`] method on [`HashSet`]. See its
+/// documentation for more.
+///
+/// [`drain_filter`]: struct.HashSet.html#method.drain_filter
+/// [`HashSet`]: struct.HashSet.html
+pub struct DrainFilter<'a, K, F>
+where
+    F: FnMut(&K) -> bool,
+{
+    f: F,
+    inner: DrainFilterInner<'a, K, ()>,
+}
+
 /// A lazy iterator producing elements in the intersection of `HashSet`s.
 ///
 /// This `struct` is created by the [`intersection`] method on [`HashSet`].
@@ -1388,6 +1443,41 @@ impl<K: fmt::Debug> fmt::Debug for Drain<'_, K> {
         f.debug_list().entries(entries_iter).finish()
     }
 }
+
+impl<'a, K, F> Drop for DrainFilter<'a, K, F>
+where
+    F: FnMut(&K) -> bool,
+{
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn drop(&mut self) {
+        while let Some(item) = self.next() {
+            let guard = ConsumeAllOnDrop(self);
+            drop(item);
+            mem::forget(guard);
+        }
+    }
+}
+
+impl<K, F> Iterator for DrainFilter<'_, K, F>
+where
+    F: FnMut(&K) -> bool,
+{
+    type Item = K;
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let f = &mut self.f;
+        let (k, _) = self.inner.next(&mut |k, _| f(k))?;
+        Some(k)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, self.inner.iter.size_hint().1)
+    }
+}
+
+impl<K, F> FusedIterator for DrainFilter<'_, K, F> where F: FnMut(&K) -> bool {}
 
 impl<T, S> Clone for Intersection<'_, T, S> {
     #[cfg_attr(feature = "inline-more", inline)]
@@ -1608,9 +1698,7 @@ fn assert_covariance() {
     ) -> Union<'a, &'new str, DefaultHashBuilder> {
         v
     }
-    fn drain<'new>(
-        d: Drain<'static, &'static str>,
-    ) -> Drain<'new, &'new str> {
+    fn drain<'new>(d: Drain<'static, &'static str>) -> Drain<'new, &'new str> {
         d
     }
 }
@@ -1999,6 +2087,23 @@ mod test_set {
         assert!(set.contains(&2));
         assert!(set.contains(&4));
         assert!(set.contains(&6));
+    }
+
+    #[test]
+    fn test_drain_filter() {
+        {
+            let mut set: HashSet<i32> = (0..8).collect();
+            let drained = set.drain_filter(|&k| k % 2 == 0);
+            let mut out = drained.collect::<Vec<_>>();
+            out.sort_unstable();
+            assert_eq!(vec![0, 2, 4, 6], out);
+            assert_eq!(set.len(), 4);
+        }
+        {
+            let mut set: HashSet<i32> = (0..8).collect();
+            drop(set.drain_filter(|&k| k % 2 == 0));
+            assert_eq!(set.len(), 4, "Removes non-matching items on drop");
+        }
     }
 
     #[test]
