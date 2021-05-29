@@ -238,6 +238,30 @@ impl<T, S> HashSet<T, S> {
         self.map.is_empty()
     }
 
+    /// Clears the set, returning all elements in an iterator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashSet;
+    ///
+    /// let mut set: HashSet<_> = [1, 2, 3].iter().cloned().collect();
+    /// assert!(!set.is_empty());
+    ///
+    /// // print 1, 2, 3 in an arbitrary order
+    /// for i in set.drain() {
+    ///     println!("{}", i);
+    /// }
+    ///
+    /// assert!(set.is_empty());
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn drain(&mut self) -> Drain<'_, T> {
+        Drain {
+            iter: self.map.drain(),
+        }
+    }
+
     /// Retains only the elements specified by the predicate.
     ///
     /// In other words, remove all elements `e` such that `f(&e)` returns `false`.
@@ -1164,6 +1188,17 @@ pub struct IntoIter<K> {
     iter: map::IntoIter<K, ()>,
 }
 
+/// A draining iterator over the items of a `HashSet`.
+///
+/// This `struct` is created by the [`drain`] method on [`HashSet`].
+/// See its documentation for more.
+///
+/// [`HashSet`]: struct.HashSet.html
+/// [`drain`]: struct.HashSet.html#method.drain
+pub struct Drain<'a, K> {
+    iter: map::Drain<'a, K, ()>,
+}
+
 /// A lazy iterator producing elements in the intersection of `HashSet`s.
 ///
 /// This `struct` is created by the [`intersection`] method on [`HashSet`].
@@ -1315,6 +1350,39 @@ impl<K> ExactSizeIterator for IntoIter<K> {
 impl<K> FusedIterator for IntoIter<K> {}
 
 impl<K: fmt::Debug> fmt::Debug for IntoIter<K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let entries_iter = self.iter.iter().map(|(k, _)| k);
+        f.debug_list().entries(entries_iter).finish()
+    }
+}
+
+impl<K> Iterator for Drain<'_, K> {
+    type Item = K;
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn next(&mut self) -> Option<K> {
+        // Avoid `Option::map` because it bloats LLVM IR.
+        match self.iter.next() {
+            Some((k, _)) => Some(k),
+            None => None,
+        }
+    }
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<K> ExactSizeIterator for Drain<'_, K> {
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn len(&self) -> usize {
+        self.iter.len()
+    }
+}
+
+impl<K> FusedIterator for Drain<'_, K> {}
+
+impl<K: fmt::Debug> fmt::Debug for Drain<'_, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let entries_iter = self.iter.iter().map(|(k, _)| k);
         f.debug_list().entries(entries_iter).finish()
@@ -1539,6 +1607,11 @@ fn assert_covariance() {
         v: Union<'a, &'static str, DefaultHashBuilder>,
     ) -> Union<'a, &'new str, DefaultHashBuilder> {
         v
+    }
+    fn drain<'new>(
+        d: Drain<'static, &'static str>,
+    ) -> Drain<'new, &'new str> {
+        d
     }
 }
 
@@ -1816,6 +1889,45 @@ mod test_set {
 
         assert!(set_str == "{1, 2}" || set_str == "{2, 1}");
         assert_eq!(format!("{:?}", empty), "{}");
+    }
+
+    #[test]
+    fn test_trivial_drain() {
+        let mut s = HashSet::<i32>::new();
+        for _ in s.drain() {}
+        assert!(s.is_empty());
+        drop(s);
+
+        let mut s = HashSet::<i32>::new();
+        drop(s.drain());
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn test_drain() {
+        let mut s: HashSet<_> = (1..100).collect();
+
+        // try this a bunch of times to make sure we don't screw up internal state.
+        for _ in 0..20 {
+            assert_eq!(s.len(), 99);
+
+            {
+                let mut last_i = 0;
+                let mut d = s.drain();
+                for (i, x) in d.by_ref().take(50).enumerate() {
+                    last_i = i;
+                    assert!(x != 0);
+                }
+                assert_eq!(last_i, 49);
+            }
+
+            for _ in &s {
+                panic!("s should be empty!");
+            }
+
+            // reset to try again.
+            s.extend(1..100);
+        }
     }
 
     #[test]
