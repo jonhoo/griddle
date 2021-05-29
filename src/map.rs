@@ -645,6 +645,45 @@ impl<K, V, S> HashMap<K, V, S> {
         }
     }
 
+    /// Drains elements which are true under the given predicate,
+    /// and returns an iterator over the removed items.
+    ///
+    /// In other words, move all pairs `(k, v)` such that `f(&k,&mut v)` returns `true` out
+    /// into another iterator.
+    ///
+    /// When the returned DrainedFilter is dropped, any remaining elements that satisfy
+    /// the predicate are dropped from the table.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use griddle::HashMap;
+    ///
+    /// let mut map: HashMap<i32, i32> = (0..8).map(|x| (x, x)).collect();
+    /// let drained: HashMap<i32, i32> = map.drain_filter(|k, _v| k % 2 == 0).collect();
+    ///
+    /// let mut evens = drained.keys().cloned().collect::<Vec<_>>();
+    /// let mut odds = map.keys().cloned().collect::<Vec<_>>();
+    /// evens.sort();
+    /// odds.sort();
+    ///
+    /// assert_eq!(evens, vec![0, 2, 4, 6]);
+    /// assert_eq!(odds, vec![1, 3, 5, 7]);
+    /// ```
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub fn drain_filter<F>(&mut self, f: F) -> DrainFilter<'_, K, V, F>
+    where
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        DrainFilter {
+            f,
+            inner: DrainFilterInner {
+                iter: unsafe { self.table.iter() },
+                table: &mut self.table,
+            },
+        }
+    }
+
     /// Clears the map, removing all key-value pairs. Keeps the allocated memory
     /// for reuse.
     ///
@@ -1373,6 +1412,87 @@ impl<K, V> Drain<'_, K, V> {
             inner: self.inner.iter(),
             marker: PhantomData,
         }
+    }
+}
+
+/// A draining iterator over entries of a `HashMap` which don't satisfy the predicate `f`.
+///
+/// This `struct` is created by the [`drain_filter`] method on [`HashMap`]. See its
+/// documentation for more.
+///
+/// [`drain_filter`]: struct.HashMap.html#method.drain_filter
+/// [`HashMap`]: struct.HashMap.html
+pub struct DrainFilter<'a, K, V, F>
+where
+    F: FnMut(&K, &mut V) -> bool,
+{
+    f: F,
+    inner: DrainFilterInner<'a, K, V>,
+}
+
+impl<'a, K, V, F> Drop for DrainFilter<'a, K, V, F>
+where
+    F: FnMut(&K, &mut V) -> bool,
+{
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn drop(&mut self) {
+        while let Some(item) = self.next() {
+            let guard = ConsumeAllOnDrop(self);
+            drop(item);
+            mem::forget(guard);
+        }
+    }
+}
+
+pub(super) struct ConsumeAllOnDrop<'a, T: Iterator>(pub &'a mut T);
+
+impl<T: Iterator> Drop for ConsumeAllOnDrop<'_, T> {
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn drop(&mut self) {
+        self.0.for_each(drop)
+    }
+}
+
+impl<K, V, F> Iterator for DrainFilter<'_, K, V, F>
+where
+    F: FnMut(&K, &mut V) -> bool,
+{
+    type Item = (K, V);
+
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next(&mut self.f)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, self.inner.iter.size_hint().1)
+    }
+}
+
+impl<K, V, F> FusedIterator for DrainFilter<'_, K, V, F> where F: FnMut(&K, &mut V) -> bool {}
+
+/// Portions of `DrainFilter` shared with `set::DrainFilter`
+pub(super) struct DrainFilterInner<'a, K, V> {
+    pub iter: RawIter<(K, V)>,
+    pub table: &'a mut RawTable<(K, V)>,
+}
+
+impl<K, V> DrainFilterInner<'_, K, V> {
+    #[cfg_attr(feature = "inline-more", inline)]
+    pub(super) fn next<F>(&mut self, f: &mut F) -> Option<(K, V)>
+    where
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        unsafe {
+            while let Some(item) = self.iter.next() {
+                let &mut (ref key, ref mut value) = item.as_mut();
+                if f(key, value) {
+                    return Some(self.table.remove(item));
+                }
+            }
+        }
+        None
     }
 }
 
@@ -4250,6 +4370,23 @@ mod test_map {
         assert_eq!(map[&2], 20);
         assert_eq!(map[&4], 40);
         assert_eq!(map[&6], 60);
+    }
+
+    #[test]
+    fn test_drain_filter() {
+        {
+            let mut map: HashMap<i32, i32> = (0..8).map(|x| (x, x * 10)).collect();
+            let drained = map.drain_filter(|&k, _| k % 2 == 0);
+            let mut out = drained.collect::<Vec<_>>();
+            out.sort_unstable();
+            assert_eq!(vec![(0, 0), (2, 20), (4, 40), (6, 60)], out);
+            assert_eq!(map.len(), 4);
+        }
+        {
+            let mut map: HashMap<i32, i32> = (0..8).map(|x| (x, x * 10)).collect();
+            drop(map.drain_filter(|&k, _| k % 2 == 0));
+            assert_eq!(map.len(), 4);
+        }
     }
 
     #[test]
