@@ -1415,7 +1415,7 @@ impl<K, V> Drain<'_, K, V> {
     }
 }
 
-/// A draining iterator over entries of a `HashMap` which don't satisfy the predicate `f`.
+/// A draining iterator over entries of a `HashMap` which satisfy the predicate `f`.
 ///
 /// This `struct` is created by the [`drain_filter`] method on [`HashMap`]. See its
 /// documentation for more.
