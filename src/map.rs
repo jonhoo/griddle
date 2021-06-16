@@ -4373,9 +4373,47 @@ mod test_map {
     }
 
     #[test]
+    fn test_drain() {
+        {
+            let mut map = HashMap::<i32, i32>::new();
+            for x in 0..8 {
+                map.insert(x, x * 10);
+            }
+            assert!(map.is_split());
+            for _ in map.drain() {}
+            assert!(map.is_empty());
+        }
+        {
+            let mut map = HashMap::<i32, i32>::new();
+            for x in 0..8 {
+                map.insert(x, x * 10);
+            }
+            assert!(map.is_split());
+            drop(map.drain());
+            assert!(map.is_empty());
+        }
+        {
+            let mut map = HashMap::<i32, i32>::new();
+            for x in 0..8 {
+                map.insert(x, x * 10);
+            }
+            assert!(map.is_split());
+            std::mem::forget(map.drain());
+            assert!(
+                map.is_empty(),
+                "Must replace the original table for an empty one"
+            );
+        }
+    }
+
+    #[test]
     fn test_drain_filter() {
         {
-            let mut map: HashMap<i32, i32> = (0..8).map(|x| (x, x * 10)).collect();
+            let mut map: HashMap<i32, i32> = HashMap::new();
+            for x in 0..8 {
+                map.insert(x, x * 10);
+            }
+            assert!(map.is_split());
             let drained = map.drain_filter(|&k, _| k % 2 == 0);
             let mut out = drained.collect::<Vec<_>>();
             out.sort_unstable();
@@ -4383,9 +4421,28 @@ mod test_map {
             assert_eq!(map.len(), 4);
         }
         {
-            let mut map: HashMap<i32, i32> = (0..8).map(|x| (x, x * 10)).collect();
+            let mut map: HashMap<i32, i32> = HashMap::new();
+            for x in 0..8 {
+                map.insert(x, x * 10);
+            }
+            assert!(map.is_split());
             drop(map.drain_filter(|&k, _| k % 2 == 0));
-            assert_eq!(map.len(), 4);
+            assert_eq!(map.len(), 4, "Removes non-matching items on drop");
+        }
+        {
+            let mut map: HashMap<i32, i32> = HashMap::new();
+            for x in 0..8 {
+                map.insert(x, x * 10);
+            }
+            assert!(map.is_split());
+            let mut drain = map.drain_filter(|&k, _| k % 2 == 0);
+            drain.next();
+            std::mem::forget(drain);
+            assert_eq!(
+                map.len(),
+                7,
+                "Must only remove remaining items when (and if) dropped"
+            );
         }
     }
 

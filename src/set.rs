@@ -205,6 +205,11 @@ impl<T, S> HashSet<T, S> {
         }
     }
 
+    #[cfg(test)]
+    fn is_split(&self) -> bool {
+        self.map.table.is_split()
+    }
+
     /// Returns the number of elements in the set.
     ///
     /// # Examples
@@ -2092,7 +2097,11 @@ mod test_set {
     #[test]
     fn test_drain_filter() {
         {
-            let mut set: HashSet<i32> = (0..8).collect();
+            let mut set: HashSet<i32> = HashSet::new();
+            for x in 0..8 {
+                set.insert(x);
+            }
+            assert!(set.is_split());
             let drained = set.drain_filter(|&k| k % 2 == 0);
             let mut out = drained.collect::<Vec<_>>();
             out.sort_unstable();
@@ -2100,9 +2109,28 @@ mod test_set {
             assert_eq!(set.len(), 4);
         }
         {
-            let mut set: HashSet<i32> = (0..8).collect();
+            let mut set: HashSet<i32> = HashSet::new();
+            for x in 0..8 {
+                set.insert(x);
+            }
+            assert!(set.is_split());
             drop(set.drain_filter(|&k| k % 2 == 0));
             assert_eq!(set.len(), 4, "Removes non-matching items on drop");
+        }
+        {
+            let mut set: HashSet<i32> = HashSet::new();
+            for x in 0..8 {
+                set.insert(x);
+            }
+            assert!(set.is_split());
+            let mut drain = set.drain_filter(|&k| k % 2 == 0);
+            drain.next();
+            std::mem::forget(drain);
+            assert_eq!(
+                set.len(),
+                7,
+                "Must only remove remaining items when (and if) dropped"
+            );
         }
     }
 
