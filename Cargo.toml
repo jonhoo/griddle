@@ -2,7 +2,7 @@
 name = "griddle"
 version = "0.5.2"
 authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
-edition = "2018"
+edition = "2021"
 license = "MIT OR Apache-2.0"
 
 readme = "README.md"
@@ -34,15 +34,15 @@ serde_test = "1.0"
 default = ["ahash", "inline-more"]
 
 ahash-compile-time-rng = ["ahash_/compile-time-rng"]
-ahash = [ "ahash_", "hashbrown/ahash" ]
-serde = [ "serde_", "hashbrown/serde" ]
-rayon = [ "rayon_", "hashbrown/rayon" ]
+ahash = ["ahash_", "hashbrown/ahash"]
+serde = ["serde_", "hashbrown/serde"]
+rayon = ["rayon_", "hashbrown/rayon"]
 raw = []
 
 # Enables usage of `#[inline]` on far more functions than by default in this
 # crate. This may lead to a performance increase but often comes at a compile
 # time cost.
-inline-more = [ "hashbrown/inline-more" ]
+inline-more = ["hashbrown/inline-more"]
 
 [package.metadata.docs.rs]
 features = ["rayon", "serde", "raw"]
