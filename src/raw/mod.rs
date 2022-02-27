@@ -269,7 +269,7 @@ impl<T> RawTable<T> {
             return self.insert(hash, value, hasher);
         }
 
-        self.insert_no_grow(hash, value, hasher)
+        unsafe { self.insert_no_grow(hash, value, hasher) }
     }
 
     /// Inserts a new element into the table, and returns a mutable reference to it.
@@ -290,7 +290,12 @@ impl<T> RawTable<T> {
     /// This is because while the insert won't grow the table, it may need to carry over some
     /// elements from the pre-resize table to the current table, which requires re-hashing.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert_no_grow(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
+    pub unsafe fn insert_no_grow(
+        &mut self,
+        hash: u64,
+        value: T,
+        hasher: impl Fn(&T) -> u64,
+    ) -> Bucket<T> {
         let bucket = self.table.insert_no_grow(hash, value);
 
         if self.leftovers.is_some() {
@@ -542,7 +547,7 @@ impl<T> RawTable<T> {
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn carry(&mut self, hasher: impl Fn(&T) -> u64) {
+    pub(crate) unsafe fn carry(&mut self, hasher: impl Fn(&T) -> u64) {
         if let Some(ref mut lo) = self.leftovers {
             for _ in 0..R {
                 // It is safe to continue to access this iterator because:
@@ -555,7 +560,7 @@ impl<T> RawTable<T> {
                 if let Some(e) = lo.items.next() {
                     // We need to remove the item in this bucket from the old map
                     // to the resized map, without shrinking the old map.
-                    let value = unsafe { lo.table.remove(e) };
+                    let value = lo.table.remove(e);
                     let hash = hasher(&value);
                     self.table.insert_no_grow(hash, value);
                 } else {

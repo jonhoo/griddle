@@ -1062,8 +1062,10 @@ where
             let v = Some(mem::replace(unsafe { &mut item.as_mut().1 }, v));
             if item.will_move() {
                 debug_assert!(self.table.is_split());
-                self.table
-                    .carry(make_hasher::<K, _, V, S>(&self.hash_builder));
+                unsafe {
+                    self.table
+                        .carry(make_hasher::<K, _, V, S>(&self.hash_builder));
+                }
             }
             v
         } else {
