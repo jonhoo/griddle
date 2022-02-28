@@ -547,7 +547,7 @@ impl<T> RawTable<T> {
 
     #[cold]
     #[inline(never)]
-    pub(crate) unsafe fn carry(&mut self, hasher: impl Fn(&T) -> u64) {
+    pub(crate) fn carry(&mut self, hasher: impl Fn(&T) -> u64) {
         if let Some(ref mut lo) = self.leftovers {
             for _ in 0..R {
                 // It is safe to continue to access this iterator because:
@@ -560,9 +560,9 @@ impl<T> RawTable<T> {
                 if let Some(e) = lo.items.next() {
                     // We need to remove the item in this bucket from the old map
                     // to the resized map, without shrinking the old map.
-                    let value = lo.table.remove(e);
+                    let value = unsafe { lo.table.remove(e) };
                     let hash = hasher(&value);
-                    self.table.insert_no_grow(hash, value);
+                    unsafe { self.table.insert_no_grow(hash, value) };
                 } else {
                     // The resize is finally fully complete.
                     let _ = self.leftovers.take();
