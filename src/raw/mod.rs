@@ -130,7 +130,7 @@ impl<T> RawTable<T> {
             lo.items.reflect_remove(&item.bucket);
             let v = lo.table.remove(item.bucket);
 
-            if lo.table.len() == 0 {
+            if lo.table.is_empty() {
                 let _ = self.leftovers.take();
             }
 
@@ -269,7 +269,7 @@ impl<T> RawTable<T> {
             return self.insert(hash, value, hasher);
         }
 
-        self.insert_no_grow(hash, value, hasher)
+        unsafe { self.insert_no_grow(hash, value, hasher) }
     }
 
     /// Inserts a new element into the table, and returns a mutable reference to it.
@@ -290,7 +290,12 @@ impl<T> RawTable<T> {
     /// This is because while the insert won't grow the table, it may need to carry over some
     /// elements from the pre-resize table to the current table, which requires re-hashing.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert_no_grow(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
+    pub unsafe fn insert_no_grow(
+        &mut self,
+        hash: u64,
+        value: T,
+        hasher: impl Fn(&T) -> u64,
+    ) -> Bucket<T> {
         let bucket = self.table.insert_no_grow(hash, value);
 
         if self.leftovers.is_some() {
@@ -507,7 +512,7 @@ impl<T> RawTable<T> {
             raw::RawTable::with_capacity(need + inserts + add)
         };
         let old_table = mem::replace(&mut self.table, new_table);
-        if old_table.len() != 0 {
+        if !old_table.is_empty() {
             let old_table_items = unsafe { old_table.iter() };
             self.leftovers = Some(OldTable {
                 table: old_table,
@@ -528,7 +533,7 @@ impl<T> RawTable<T> {
             // NOTE: Calling next here could be expensive, as the iter needs to search for the
             // next non-empty bucket. as the map grows in size, that search time will increase
             // linearly.
-            while let Some(e) = lo.items.next() {
+            for e in lo.items.by_ref() {
                 // We need to remove the item in this bucket from the old map
                 // to the resized map, without shrinking the old map.
                 let value = unsafe { lo.table.remove(e) };
@@ -557,7 +562,7 @@ impl<T> RawTable<T> {
                     // to the resized map, without shrinking the old map.
                     let value = unsafe { lo.table.remove(e) };
                     let hash = hasher(&value);
-                    self.table.insert_no_grow(hash, value);
+                    unsafe { self.table.insert_no_grow(hash, value) };
                 } else {
                     // The resize is finally fully complete.
                     let _ = self.leftovers.take();
@@ -565,7 +570,7 @@ impl<T> RawTable<T> {
                 }
             }
 
-            if lo.table.len() == 0 {
+            if lo.table.is_empty() {
                 // The resize is finally fully complete.
                 let _ = self.leftovers.take();
             }

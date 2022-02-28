@@ -1,7 +1,7 @@
 jobs:
  - template: default.yml@templates
    parameters:
-     minrust: 1.42.0 # const-random-macro
+     minrust: 1.56.1 # 2021 edition
      codecov_token: $(CODECOV_TOKEN_SECRET)
      env:
        QUICKCHECK_TESTS: 500
