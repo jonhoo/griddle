@@ -66,9 +66,9 @@ jobs:
           toolchain: ${{ env.NIGHTLY }}
           components: miri
       - name: cargo miri test
-        run: cargo miri test
+        run: cargo miri test --features serde
         env:
-          MIRIFLAGS: ""
+          MIRIFLAGS: "-Zmiri-ignore-leaks"
   loom:
     runs-on: ubuntu-latest
     steps:

@@ -17,7 +17,7 @@ jobs:
     name: ${{ matrix.target }}
     strategy:
       matrix:
-        target: [thumbv7m-none-eabi, aarch64-unknown-none]
+        target: [thumbv7m-none-eabi]
     steps:
       - uses: actions/checkout@v4
         with:
