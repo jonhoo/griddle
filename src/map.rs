@@ -3166,7 +3166,7 @@ fn assert_covariance() {
 }
 
 #[cfg(test)]
-#[cfg(not(tarpaulin_include))] // don't count for coverage
+#[cfg_attr(coverage, coverage(off))]
 mod test_map {
     use super::DefaultHashBuilder;
     use super::Entry::{Occupied, Vacant};
@@ -3603,14 +3603,14 @@ mod test_map {
     fn test_lots_of_insertions() {
         let mut m = HashMap::new();
 
-        #[cfg(not(any(tarpaulin, miri)))]
+        #[cfg(not(any(coverage, miri)))]
         const N: usize = 10;
-        #[cfg(any(tarpaulin, miri))]
+        #[cfg(any(coverage, miri))]
         const N: usize = 5;
 
-        #[cfg(not(any(tarpaulin, miri)))]
+        #[cfg(not(any(coverage, miri)))]
         const M: usize = 1001;
-        #[cfg(tarpaulin)]
+        #[cfg(coverage)]
         const M: usize = 101;
         #[cfg(miri)]
         const M: usize = 16;
@@ -3678,14 +3678,14 @@ mod test_map {
     fn test_lots_of_raw_insertions() {
         let mut m = HashMap::new();
 
-        #[cfg(not(any(tarpaulin, miri)))]
+        #[cfg(not(any(coverage, miri)))]
         const N: usize = 10;
-        #[cfg(any(tarpaulin, miri))]
+        #[cfg(any(coverage, miri))]
         const N: usize = 5;
 
-        #[cfg(not(any(tarpaulin, miri)))]
+        #[cfg(not(any(coverage, miri)))]
         const M: usize = 1001;
-        #[cfg(tarpaulin)]
+        #[cfg(coverage)]
         const M: usize = 101;
         #[cfg(miri)]
         const M: usize = 16;
@@ -3790,9 +3790,9 @@ mod test_map {
     fn test_raw_entry_mut_and_modify() {
         let mut m = HashMap::new();
 
-        #[cfg(not(any(tarpaulin, miri)))]
+        #[cfg(not(any(coverage, miri)))]
         const M: usize = 1001;
-        #[cfg(tarpaulin)]
+        #[cfg(coverage)]
         const M: usize = 101;
         #[cfg(miri)]
         const M: usize = 16;
@@ -4656,16 +4656,16 @@ mod test_map {
 
     #[test]
     fn test_raw_occupied_entry_mut() {
-        #[cfg(not(any(tarpaulin, miri)))]
+        #[cfg(not(any(coverage, miri)))]
         const M: usize = 1001;
-        #[cfg(tarpaulin)]
+        #[cfg(coverage)]
         const M: usize = 101;
         #[cfg(miri)]
         const M: usize = 16;
 
-        #[cfg(not(any(tarpaulin, miri)))]
+        #[cfg(not(any(coverage, miri)))]
         const N: usize = 10;
-        #[cfg(any(tarpaulin, miri))]
+        #[cfg(any(coverage, miri))]
         const N: usize = 5;
 
         let mut m = HashMap::new();

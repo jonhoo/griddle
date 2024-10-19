@@ -1,7 +1,6 @@
 [![Crates.io](https://img.shields.io/crates/v/griddle.svg)](https://crates.io/crates/griddle)
 [![Documentation](https://docs.rs/griddle/badge.svg)](https://docs.rs/griddle/)
-[![Build Status](https://dev.azure.com/jonhoo/jonhoo/_apis/build/status/griddle?branchName=master)](https://dev.azure.com/jonhoo/jonhoo/_build/latest?definitionId=26&branchName=master)
-[![Coverage Status](https://codecov.io/gh/jonhoo/griddle/branch/master/graph/badge.svg)](https://codecov.io/gh/jonhoo/griddle)
+[![codecov](https://codecov.io/gh/jonhoo/griddle/graph/badge.svg?token=D9aE15xWkz)](https://codecov.io/gh/jonhoo/griddle)
 ![Maintenance](https://img.shields.io/badge/maintenance-experimental-blue.svg)
 
 A `HashMap` variant that spreads resize load across inserts.
