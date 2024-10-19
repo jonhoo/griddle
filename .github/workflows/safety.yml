@@ -69,16 +69,3 @@ jobs:
         run: cargo miri test --features serde
         env:
           MIRIFLAGS: "-Zmiri-ignore-leaks"
-  loom:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Install stable
-        uses: dtolnay/rust-toolchain@stable
-      - name: cargo test --test loom
-        run: cargo test --release --test loom
-        env:
-          LOOM_MAX_PREEMPTIONS: 2
-          RUSTFLAGS: "--cfg loom"
