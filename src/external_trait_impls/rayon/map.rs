@@ -328,54 +328,11 @@ where
 #[cfg(test)]
 mod test_par_map {
     use alloc::vec::Vec;
-    use core::hash::{Hash, Hasher};
     use core::sync::atomic::{AtomicUsize, Ordering};
 
     use rayon_::prelude::*;
 
     use crate::hash_map::HashMap;
-
-    struct Dropable<'a> {
-        k: usize,
-        counter: &'a AtomicUsize,
-    }
-
-    impl Dropable<'_> {
-        fn new(k: usize, counter: &AtomicUsize) -> Dropable<'_> {
-            counter.fetch_add(1, Ordering::Relaxed);
-
-            Dropable { k, counter }
-        }
-    }
-
-    impl Drop for Dropable<'_> {
-        fn drop(&mut self) {
-            self.counter.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
-
-    impl Clone for Dropable<'_> {
-        fn clone(&self) -> Self {
-            Dropable::new(self.k, self.counter)
-        }
-    }
-
-    impl Hash for Dropable<'_> {
-        fn hash<H>(&self, state: &mut H)
-        where
-            H: Hasher,
-        {
-            self.k.hash(state)
-        }
-    }
-
-    impl PartialEq for Dropable<'_> {
-        fn eq(&self, other: &Self) -> bool {
-            self.k == other.k
-        }
-    }
-
-    impl Eq for Dropable<'_> {}
 
     #[test]
     fn test_empty_iter() {

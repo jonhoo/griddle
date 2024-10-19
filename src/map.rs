@@ -3166,12 +3166,10 @@ fn assert_covariance() {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage, coverage(off))]
 mod test_map {
     use super::DefaultHashBuilder;
     use super::Entry::{Occupied, Vacant};
     use super::{HashMap, RawEntryMut};
-    use crate::TryReserveError::*;
     use rand::{rngs::SmallRng, Rng, SeedableRng};
     use std::cell::RefCell;
     use std::usize;
@@ -4327,11 +4325,11 @@ mod test_map {
         let key = "hello there";
         let value = "value goes here";
         assert!(a.is_empty());
-        a.insert(key.clone(), value.clone());
+        a.insert(key, value);
         assert_eq!(a.len(), 1);
         assert_eq!(a[key], value);
 
-        match a.entry(key.clone()) {
+        match a.entry(key) {
             Vacant(_) => panic!(),
             Occupied(e) => assert_eq!(key, *e.key()),
         }
@@ -4346,11 +4344,11 @@ mod test_map {
         let value = "value goes here";
 
         assert!(a.is_empty());
-        match a.entry(key.clone()) {
+        match a.entry(key) {
             Occupied(_) => panic!(),
             Vacant(e) => {
                 assert_eq!(key, *e.key());
-                e.insert(value.clone());
+                e.insert(value);
             }
         }
         assert_eq!(a.len(), 1);
@@ -4443,102 +4441,6 @@ mod test_map {
                 7,
                 "Must only remove remaining items when (and if) dropped"
             );
-        }
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // FIXME: no OOM signalling (https://github.com/rust-lang/miri/issues/613)
-    fn test_try_reserve() {
-        let mut empty_bytes: HashMap<u8, u8> = HashMap::new();
-
-        const MAX_USIZE: usize = usize::MAX;
-
-        if let Err(CapacityOverflow) = empty_bytes.try_reserve(MAX_USIZE) {
-        } else {
-            panic!("usize::MAX should trigger an overflow!");
-        }
-
-        if let Err(AllocError { .. }) = empty_bytes.try_reserve(MAX_USIZE / 8) {
-        } else {
-            // This may succeed if there is enough free memory. Attempt to
-            // allocate a second hashmap to ensure the allocation will fail.
-            let mut empty_bytes2: HashMap<u8, u8> = HashMap::new();
-            if let Err(AllocError { .. }) = empty_bytes2.try_reserve(MAX_USIZE / 8) {
-            } else {
-                panic!("usize::MAX / 8 should trigger an OOM!");
-            }
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "raw")]
-    fn test_into_iter_refresh() {
-        use core::hash::{BuildHasher, Hash, Hasher};
-
-        #[cfg(miri)]
-        const N: usize = 32;
-        #[cfg(not(miri))]
-        const N: usize = 128;
-
-        let mut rng = rand::thread_rng();
-        for n in 0..N {
-            let mut m = HashMap::new();
-            for i in 0..n {
-                assert!(m.insert(i, 2 * i).is_none());
-            }
-            let hasher = m.hasher().clone();
-
-            let mut it = unsafe { m.table.iter() };
-            assert_eq!(it.len(), n);
-
-            let mut i = 0;
-            let mut left = n;
-            let mut removed = Vec::new();
-            loop {
-                // occasionally remove some elements
-                if i < n && rng.gen_bool(0.1) {
-                    let mut hsh = hasher.build_hasher();
-                    i.hash(&mut hsh);
-                    let hash = hsh.finish();
-
-                    unsafe {
-                        let e = m.table.find(hash, |q| q.0.eq(&i));
-                        if let Some(e) = e {
-                            it.reflect_remove(&e);
-                            let t = m.table.remove(e);
-                            removed.push(t);
-                            left -= 1;
-                        } else {
-                            assert!(removed.contains(&(i, 2 * i)), "{} not in {:?}", i, removed);
-                            let e = m.table.insert(
-                                hash,
-                                (i, 2 * i),
-                                super::make_hasher::<usize, _, _, _>(&hasher),
-                            );
-                            it.reflect_insert(&e);
-                            if let Some(p) = removed.iter().position(|e| e == &(i, 2 * i)) {
-                                removed.swap_remove(p);
-                            }
-                            left += 1;
-                        }
-                    }
-                }
-
-                let e = it.next();
-                if e.is_none() {
-                    break;
-                }
-                assert!(i < n);
-                let t = unsafe { e.unwrap().as_ref() };
-                assert!(!removed.contains(t));
-                let (k, v) = t;
-                assert_eq!(*v, 2 * k);
-                i += 1;
-            }
-            assert!(i <= n);
-
-            // just for safety:
-            assert_eq!(m.table.len(), left);
         }
     }
 

@@ -6,7 +6,7 @@ use rayon_::iter::{
 };
 
 /// Parallel iterator which returns a raw pointer to every full bucket in the table.
-pub struct RawParIter<T> {
+pub(crate) struct RawParIter<T> {
     iter: hashbrown::raw::rayon::RawParIter<T>,
     leftovers: Option<hashbrown::raw::rayon::RawParIter<T>>,
 }
@@ -50,7 +50,7 @@ impl<T> ParallelIterator for RawParIter<T> {
 impl<T> RawTable<T> {
     /// Returns a parallel iterator over the elements in a `RawTable`.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn par_iter(&self) -> RawParIter<T> {
+    pub(crate) unsafe fn par_iter(&self) -> RawParIter<T> {
         RawParIter {
             iter: self.main().par_iter(),
             leftovers: self.leftovers().map(|t| t.iter().into()),
