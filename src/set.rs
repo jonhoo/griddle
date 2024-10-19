@@ -1709,7 +1709,7 @@ fn assert_covariance() {
 }
 
 #[cfg(test)]
-#[cfg(not(tarpaulin_include))] // don't count for coverage
+#[cfg_attr(coverage, coverage(off))]
 mod test_set {
     use super::super::map::DefaultHashBuilder;
     use super::HashSet;
