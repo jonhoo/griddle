@@ -66,26 +66,6 @@ extern crate std;
 #[cfg_attr(test, macro_use)]
 extern crate alloc;
 
-#[cfg(feature = "raw")]
-/// Experimental and unsafe `RawTable` API. This module is only available if the
-/// `raw` feature is enabled.
-pub mod raw {
-    #[path = "mod.rs"]
-    mod inner;
-    pub use inner::*;
-
-    #[cfg(feature = "rayon")]
-    /// [rayon]-based parallel iterator types for raw hash tables.
-    /// You will rarely need to interact with it directly unless you have need
-    /// to name one of the iterator types.
-    ///
-    /// [rayon]: https://docs.rs/rayon/1.0/rayon
-    pub mod rayon {
-        pub use crate::external_trait_impls::rayon::raw::*;
-    }
-}
-#[cfg(not(feature = "raw"))]
-#[allow(dead_code)]
 mod raw;
 
 mod external_trait_impls;

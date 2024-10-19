@@ -12,7 +12,7 @@ use hashbrown::{raw, TryReserveError};
 /// This is usually just a pointer to the element itself. However if the element
 /// is a ZST, then we instead track the index of the element in the table so
 /// that `erase` works properly.
-pub struct Bucket<T> {
+pub(crate) struct Bucket<T> {
     pub(crate) bucket: raw::Bucket<T>,
     pub(crate) in_main: bool,
 }
@@ -29,7 +29,7 @@ impl<T> Clone for Bucket<T> {
 
 impl<T> Bucket<T> {
     /// Returns true if this bucket is in the "old" table and will be moved.
-    pub fn will_move(&self) -> bool {
+    pub(crate) fn will_move(&self) -> bool {
         !self.in_main
     }
 }
@@ -47,7 +47,7 @@ impl<T> core::ops::Deref for Bucket<T> {
 /// resizing. When you interact with this API, keep in mind that there may be two backing tables,
 /// and a lookup may return a reference to _either_. Eventually, entries in the old table will be
 /// reclaimed, which invalidates any references to them.
-pub struct RawTable<T> {
+pub(crate) struct RawTable<T> {
     table: raw::RawTable<T>,
     leftovers: Option<OldTable<T>>,
 }
@@ -59,44 +59,25 @@ impl<T> RawTable<T> {
     /// leave the data pointer dangling since that bucket is never written to
     /// due to our load factor forcing us to always have at least 1 free bucket.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             table: raw::RawTable::new(),
             leftovers: None,
         }
     }
 
-    /// Attempts to allocate a new hash table with at least enough capacity
-    /// for inserting the given number of elements without reallocating.
-    #[cfg(feature = "raw")]
-    pub fn try_with_capacity(capacity: usize) -> Result<Self, TryReserveError> {
-        Ok(Self {
-            table: raw::RawTable::try_with_capacity(capacity)?,
-            leftovers: None,
-        })
-    }
-
     /// Allocates a new hash table with at least enough capacity for inserting
     /// the given number of elements without reallocating.
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             table: raw::RawTable::with_capacity(capacity),
             leftovers: None,
         }
     }
 
-    /// Returns a pointer to an element in the table.
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn bucket(&self, index: usize) -> Bucket<T> {
-        Bucket {
-            bucket: self.table.bucket(index),
-            in_main: true,
-        }
-    }
-
     /// Erases an element from the table, dropping it in place.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn erase(&mut self, item: Bucket<T>) {
+    pub(crate) unsafe fn erase(&mut self, item: Bucket<T>) {
         if item.in_main {
             self.table.erase(item.bucket);
         } else if let Some(ref mut lo) = self.leftovers {
@@ -107,28 +88,14 @@ impl<T> RawTable<T> {
         }
     }
 
-    /// Finds and erases an element from the table, dropping it in place.
-    /// Returns true if an element was found.
-    #[cfg(feature = "raw")]
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn erase_entry(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> bool {
-        // Avoid `Option::map` because it bloats LLVM IR.
-        if let Some(bucket) = self.find(hash, eq) {
-            unsafe { self.erase(bucket) };
-            true
-        } else {
-            false
-        }
-    }
-
     /// Removes an element from the table, returning it.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn remove(&mut self, item: Bucket<T>) -> T {
+    pub(crate) unsafe fn remove(&mut self, item: Bucket<T>) -> T {
         if item.in_main {
-            self.table.remove(item.bucket)
+            self.table.remove(item.bucket).0
         } else if let Some(ref mut lo) = self.leftovers {
             lo.items.reflect_remove(&item.bucket);
-            let v = lo.table.remove(item.bucket);
+            let (v, _) = lo.table.remove(item.bucket);
 
             if lo.table.len() == 0 {
                 let _ = self.leftovers.take();
@@ -142,7 +109,7 @@ impl<T> RawTable<T> {
 
     /// Finds and removes an element from the table, returning it.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn remove_entry(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<T> {
+    pub(crate) fn remove_entry(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<T> {
         // Avoid `Option::map` because it bloats LLVM IR.
         match self.find(hash, eq) {
             Some(bucket) => Some(unsafe { self.remove(bucket) }),
@@ -152,7 +119,7 @@ impl<T> RawTable<T> {
 
     /// Removes all elements from the table without freeing the backing memory.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         let _ = self.leftovers.take();
         self.table.clear();
     }
@@ -162,7 +129,7 @@ impl<T> RawTable<T> {
     /// In reality, the table may end up larger than `min_size`, as must be able to hold all the
     /// current elements, as well as some additional elements due to incremental resizing.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn shrink_to(&mut self, min_size: usize, hasher: impl Fn(&T) -> u64) {
+    pub(crate) fn shrink_to(&mut self, min_size: usize, hasher: impl Fn(&T) -> u64) {
         // Calculate the minimal number of elements that we need to reserve
         // space for.
         let mut need = self.table.len();
@@ -185,7 +152,7 @@ impl<T> RawTable<T> {
     ///
     /// While we try to make this incremental where possible, it may require all-at-once resizing.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn reserve(&mut self, additional: usize, hasher: impl Fn(&T) -> u64) {
+    pub(crate) fn reserve(&mut self, additional: usize, hasher: impl Fn(&T) -> u64) {
         let need = self.leftovers.as_ref().map_or(0, |t| t.table.len()) + additional;
         if self.table.capacity() - self.table.len() > need {
             // We can accommodate the additional items without resizing, so all is well.
@@ -224,7 +191,7 @@ impl<T> RawTable<T> {
     ///
     /// While we try to make this incremental where possible, it may require all-at-once resizing.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn try_reserve(
+    pub(crate) fn try_reserve(
         &mut self,
         additional: usize,
         hasher: impl Fn(&T) -> u64,
@@ -260,7 +227,7 @@ impl<T> RawTable<T> {
     ///
     /// This does not check if the given element already exists in the table.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
+    pub(crate) fn insert(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
         if self.table.capacity() == self.table.len() {
             assert!(self.leftovers.is_none());
             // Even though this _may_ succeed without growing due to tombstones, handling
@@ -269,14 +236,20 @@ impl<T> RawTable<T> {
             return self.insert(hash, value, hasher);
         }
 
-        self.insert_no_grow(hash, value, hasher)
+        // SAFETY: unknown requirements, but _was_ safe
+        unsafe { self.insert_no_grow(hash, value, hasher) }
     }
 
     /// Inserts a new element into the table, and returns a mutable reference to it.
     ///
     /// This does not check if the given element already exists in the table.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert_entry(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> &mut T {
+    pub(crate) fn insert_entry(
+        &mut self,
+        hash: u64,
+        value: T,
+        hasher: impl Fn(&T) -> u64,
+    ) -> &mut T {
         unsafe { self.insert(hash, value, hasher).as_mut() }
     }
 
@@ -290,8 +263,14 @@ impl<T> RawTable<T> {
     /// This is because while the insert won't grow the table, it may need to carry over some
     /// elements from the pre-resize table to the current table, which requires re-hashing.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert_no_grow(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> Bucket<T> {
-        let bucket = self.table.insert_no_grow(hash, value);
+    pub(crate) unsafe fn insert_no_grow(
+        &mut self,
+        hash: u64,
+        value: T,
+        hasher: impl Fn(&T) -> u64,
+    ) -> Bucket<T> {
+        // SAFETY: unknown requirements, but mirrored to caller
+        let bucket = unsafe { self.table.insert_no_grow(hash, value) };
 
         if self.leftovers.is_some() {
             // Also carry some items over.
@@ -311,7 +290,7 @@ impl<T> RawTable<T> {
     ///
     /// This does not check if the given bucket is actually occupied.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn replace_bucket_with<F>(&mut self, bucket: Bucket<T>, f: F) -> bool
+    pub(crate) unsafe fn replace_bucket_with<F>(&mut self, bucket: Bucket<T>, f: F) -> bool
     where
         F: FnOnce(T) -> Option<T>,
     {
@@ -334,7 +313,7 @@ impl<T> RawTable<T> {
 
     /// Searches for an element in the table.
     #[inline]
-    pub fn find(&self, hash: u64, mut eq: impl FnMut(&T) -> bool) -> Option<Bucket<T>> {
+    pub(crate) fn find(&self, hash: u64, mut eq: impl FnMut(&T) -> bool) -> Option<Bucket<T>> {
         let e = self.table.find(hash, &mut eq);
         if let Some(bucket) = e {
             return Some(Bucket {
@@ -355,7 +334,7 @@ impl<T> RawTable<T> {
 
     /// Gets a reference to an element in the table.
     #[inline]
-    pub fn get(&self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&T> {
+    pub(crate) fn get(&self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&T> {
         // Avoid `Option::map` because it bloats LLVM IR.
         match self.find(hash, eq) {
             Some(bucket) => Some(unsafe { bucket.as_ref() }),
@@ -365,7 +344,7 @@ impl<T> RawTable<T> {
 
     /// Gets a mutable reference to an element in the table.
     #[inline]
-    pub fn get_mut(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&mut T> {
+    pub(crate) fn get_mut(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&mut T> {
         // Avoid `Option::map` because it bloats LLVM IR.
         match self.find(hash, eq) {
             Some(bucket) => Some(unsafe { bucket.as_mut() }),
@@ -378,19 +357,19 @@ impl<T> RawTable<T> {
     /// This number is a lower bound; the table might be able to hold
     /// more, but is guaranteed to be able to hold at least this many.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         self.table.capacity()
     }
 
     /// Returns the number of elements in the table.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.table.len() + self.leftovers.as_ref().map_or(0, |t| t.table.len())
     }
 
     /// Returns the number of buckets in the table.
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn buckets(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn buckets(&self) -> usize {
         self.table.buckets()
     }
 
@@ -399,7 +378,7 @@ impl<T> RawTable<T> {
     /// Because we cannot make the `next` method unsafe on the `RawIter`
     /// struct, we have to make the `iter` method unsafe.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn iter(&self) -> RawIter<T> {
+    pub(crate) unsafe fn iter(&self) -> RawIter<T> {
         RawIter {
             table: self.table.iter(),
             leftovers: self.leftovers.as_ref().map(|lo| lo.items.clone()),
@@ -409,7 +388,7 @@ impl<T> RawTable<T> {
     /// Returns an iterator which removes all elements from the table without
     /// freeing the memory.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn drain(&mut self) -> RawDrain<'_, T> {
+    pub(crate) fn drain(&mut self) -> RawDrain<'_, T> {
         RawDrain {
             table: self.table.drain(),
             leftovers: self
@@ -425,7 +404,7 @@ impl<T> RawTable<T> {
     ///
     /// It is up to the caller to ensure that the iterator is valid for this
     /// `RawTable` and covers all items that remain in the table.
-    pub unsafe fn into_iter_from(self, iter: RawIter<T>) -> RawIntoIter<T> {
+    pub(crate) unsafe fn into_iter_from(self, iter: RawIter<T>) -> RawIntoIter<T> {
         RawIntoIter {
             table: self.table.into_iter_from(iter.table),
             leftovers: self.leftovers.map(|lo| lo.table.into_iter_from(lo.items)),
@@ -449,7 +428,7 @@ fn and_carry_with_hasher<T: Clone>(
 
 impl<T: Clone> RawTable<T> {
     /// Variant of `clone_from` to use when a hasher is available.
-    pub fn clone_from_with_hasher(&mut self, source: &Self, hasher: impl Fn(&T) -> u64) {
+    pub(crate) fn clone_from_with_hasher(&mut self, source: &Self, hasher: impl Fn(&T) -> u64) {
         let _ = self.leftovers.take();
         self.table.clone_from_with_hasher(&source.table, &hasher);
         // Since we're doing the work of cloning anyway, we might as well carry the leftovers.
@@ -457,7 +436,7 @@ impl<T: Clone> RawTable<T> {
     }
 
     /// Variant of `clone` to use when a hasher is available.
-    pub fn clone_with_hasher(&self, hasher: impl Fn(&T) -> u64) -> Self {
+    pub(crate) fn clone_with_hasher(&self, hasher: impl Fn(&T) -> u64) -> Self {
         let mut table = self.table.clone();
         // Since we're doing the work of cloning anyway, we might as well carry the leftovers.
         and_carry_with_hasher(&mut table, &self.leftovers, hasher);
@@ -531,7 +510,7 @@ impl<T> RawTable<T> {
             while let Some(e) = lo.items.next() {
                 // We need to remove the item in this bucket from the old map
                 // to the resized map, without shrinking the old map.
-                let value = unsafe { lo.table.remove(e) };
+                let (value, _) = unsafe { lo.table.remove(e) };
                 let hash = hasher(&value);
                 self.table.insert(hash, value, &hasher);
             }
@@ -555,9 +534,10 @@ impl<T> RawTable<T> {
                 if let Some(e) = lo.items.next() {
                     // We need to remove the item in this bucket from the old map
                     // to the resized map, without shrinking the old map.
-                    let value = unsafe { lo.table.remove(e) };
+                    let (value, _) = unsafe { lo.table.remove(e) };
                     let hash = hasher(&value);
-                    self.table.insert_no_grow(hash, value);
+                    // SAFETY: unknown requirements, but _was_ safe
+                    unsafe { self.table.insert_no_grow(hash, value) };
                 } else {
                     // The resize is finally fully complete.
                     let _ = self.leftovers.take();
@@ -620,46 +600,9 @@ struct OldTable<T> {
 ///   created will be yielded by that iterator (unless `reflect_insert` is called).
 /// - The order in which the iterator yields bucket is unspecified and may
 ///   change in the future.
-pub struct RawIter<T> {
+pub(crate) struct RawIter<T> {
     table: raw::RawIter<T>,
     leftovers: Option<raw::RawIter<T>>,
-}
-
-impl<T> RawIter<T> {
-    /// Refresh the iterator so that it reflects a removal from the given bucket.
-    ///
-    /// For the iterator to remain valid, this method must be called once
-    /// for each removed bucket before `next` is called again.
-    ///
-    /// This method should be called _before_ the removal is made. It is not necessary to call this
-    /// method if you are removing an item that this iterator yielded in the past.
-    #[cfg(feature = "raw")]
-    pub fn reflect_remove(&mut self, b: &Bucket<T>) {
-        if b.in_main {
-            self.table.reflect_remove(b)
-        } else if let Some(ref mut lo) = self.leftovers {
-            // NOTE: The actuall call to erase/remove will take care of calling reflect_remove in
-            // the "main" leftover's iterator.
-            lo.reflect_remove(b)
-        } else {
-            unreachable!("invalid bucket state");
-        }
-    }
-
-    /// Refresh the iterator so that it reflects an insertion into the given bucket.
-    ///
-    /// For the iterator to remain valid, this method must be called once
-    /// for each insert before `next` is called again.
-    ///
-    /// This method does not guarantee that an insertion of a bucket witha greater
-    /// index than the last one yielded will be reflected in the iterator.
-    ///
-    /// This method should be called _after_ the given insert is made.
-    #[cfg(feature = "raw")]
-    pub fn reflect_insert(&mut self, b: &Bucket<T>) {
-        assert!(b.in_main, "no insertion can happen into leftovers");
-        self.table.reflect_insert(b)
-    }
 }
 
 impl<T> Clone for RawIter<T> {
@@ -710,7 +653,7 @@ impl<T> ExactSizeIterator for RawIter<T> {}
 impl<T> FusedIterator for RawIter<T> {}
 
 /// Iterator which consumes a table and returns elements.
-pub struct RawIntoIter<T> {
+pub(crate) struct RawIntoIter<T> {
     table: raw::RawIntoIter<T>,
     leftovers: Option<raw::RawIntoIter<T>>,
 }
@@ -718,7 +661,7 @@ pub struct RawIntoIter<T> {
 impl<T> RawIntoIter<T> {
     /// Returns a by-reference iterator over the remaining items of this iterator.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn iter(&self) -> RawIter<T> {
+    pub(crate) fn iter(&self) -> RawIter<T> {
         RawIter {
             table: self.table.iter(),
             leftovers: self.leftovers.as_ref().map(|lo| lo.iter()),
@@ -751,7 +694,7 @@ impl<T> ExactSizeIterator for RawIntoIter<T> {}
 impl<T> FusedIterator for RawIntoIter<T> {}
 
 /// Iterator which consumes elements without freeing the table storage.
-pub struct RawDrain<'a, T> {
+pub(crate) struct RawDrain<'a, T> {
     table: raw::RawDrain<'a, T>,
     leftovers: Option<raw::RawIntoIter<T>>,
 }
@@ -759,7 +702,7 @@ pub struct RawDrain<'a, T> {
 impl<T> RawDrain<'_, T> {
     /// Returns a by-reference iterator over the remaining items of this iterator.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn iter(&self) -> RawIter<T> {
+    pub(crate) fn iter(&self) -> RawIter<T> {
         RawIter {
             table: self.table.iter(),
             leftovers: self.leftovers.as_ref().map(|lo| lo.iter()),

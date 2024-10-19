@@ -1033,18 +1033,6 @@ where
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         self.map.extend(iter.into_iter().map(|k| (k, ())));
     }
-
-    #[inline]
-    #[cfg(feature = "nightly")]
-    fn extend_one(&mut self, k: T) {
-        self.map.insert(k, ());
-    }
-
-    #[inline]
-    #[cfg(feature = "nightly")]
-    fn extend_reserve(&mut self, additional: usize) {
-        Extend::<(T, ())>::extend_reserve(&mut self.map, additional);
-    }
 }
 
 impl<'a, T, S> Extend<&'a T> for HashSet<T, S>
@@ -1055,18 +1043,6 @@ where
     #[cfg_attr(feature = "inline-more", inline)]
     fn extend<I: IntoIterator<Item = &'a T>>(&mut self, iter: I) {
         self.extend(iter.into_iter().cloned());
-    }
-
-    #[inline]
-    #[cfg(feature = "nightly")]
-    fn extend_one(&mut self, k: &'a T) {
-        self.map.insert(*k, ());
-    }
-
-    #[inline]
-    #[cfg(feature = "nightly")]
-    fn extend_reserve(&mut self, additional: usize) {
-        Extend::<(T, ())>::extend_reserve(&mut self.map, additional);
     }
 }
 
@@ -1709,7 +1685,6 @@ fn assert_covariance() {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage, coverage(off))]
 mod test_set {
     use super::super::map::DefaultHashBuilder;
     use super::HashSet;
@@ -2028,6 +2003,7 @@ mod test_set {
         use core::hash;
 
         #[derive(Debug)]
+        #[allow(dead_code)]
         struct Foo(&'static str, i32);
 
         impl PartialEq for Foo {

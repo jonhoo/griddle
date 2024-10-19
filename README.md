@@ -80,18 +80,19 @@ work required to find the buckets that hold elements that must be moved.
 ## Implementation
 
 Griddle uses the
-[`hashbrown::raw`](https://docs.rs/hashbrown/0.8/hashbrown/raw/index.html)
+[`hashbrown::raw`](https://docs.rs/hashbrown/0.14/hashbrown/raw/index.html)
 API, which allows it to take advantage of all the awesome work that has
 gone into making `hashbrown` as fast as it is. The key different parts
-of griddle live in `src/raw/mod.rs`.
+of griddle live in `src/raw/mod.rs`. The `raw` API was [removed in
+`hashbrown` 0.15](https://github.com/rust-lang/hashbrown/issues/545), so
+Griddle is stuck on 0.14 for now.
 
 Griddle aims to stick as closely to `hashbrown` as it can, both in terms
 of code and API. `src/map.rs` and `src/set.rs` are virtually identical
 to the equivalent files in `hashbrown` (I encourage you to diff them!),
 without only some (currently;
 [#4](https://github.com/jonhoo/griddle/issues/4)) unsupported API
-removed. Like `hashbrown`, griddle exposes a `raw` module, which lets
-you build your own map implementation on top of griddle's table variant.
+removed.
 
 ## Why "griddle"?
 
